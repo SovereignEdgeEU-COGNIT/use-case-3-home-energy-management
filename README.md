@@ -5,9 +5,9 @@ devices in the local grid. The algorithm retrieves information about all control
 on them, it determines parameters for the next time step and calculates energy transmission in the household.
 
 ## Building
-Use `pip` to build the library. In `uce-case-3-home-energy-managment` directory call:
+Use `pip` to build the library. In `use-case-3-home-energy-managment` directory call:
 ```bash
-pip install uce-case-3-home-energy-managment
+pip install use-case-3-home-energy-managment
 ```
 
 ### Decision algorithm

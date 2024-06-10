@@ -7,8 +7,8 @@ from phoenixsystems.sem.device import (
     InfoForDevice,
     METERSIM_NO_UPDATE_SCHEDULED,
 )
-from device_utils import complex_dot_product, DeviceUserApi
-from simple_device import ScheduledDevice
+from home_energy_management.device_simulators.device_utils import complex_dot_product, DeviceUserApi
+from home_energy_management.device_simulators.simple_device import ScheduledDevice
 
 
 class AbstractPV(Device, DeviceUserApi, ABC):

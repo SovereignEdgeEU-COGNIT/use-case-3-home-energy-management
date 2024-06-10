@@ -6,8 +6,8 @@ from phoenixsystems.sem.device import (
     InfoForDevice,
     METERSIM_NO_UPDATE_SCHEDULED,
 )
-from photovoltaic import AbstractPV
-from storage import Storage
+from home_energy_management.device_simulators.photovoltaic import AbstractPV
+from home_energy_management.device_simulators.storage import Storage
 
 
 @dataclass
