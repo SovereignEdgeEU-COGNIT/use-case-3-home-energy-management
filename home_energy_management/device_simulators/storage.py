@@ -41,8 +41,8 @@ class Storage(Device, DeviceUserApi):
         self.curr_capacity = max(self.curr_capacity, 0)
 
         if power < 0:
-            self.currCapacity = max(self.currCapacity, self.min_charge_level / 100 * self.max_capacity)
-            tt = math.ceil((self.currCapacity - self.min_charge_level / 100 * self.max_capacity) / (-power) * 3600)
+            self.curr_capacity = max(self.curr_capacity, self.min_charge_level / 100 * self.max_capacity)
+            tt = math.ceil((self.curr_capacity - self.min_charge_level / 100 * self.max_capacity) / (-power) * 3600)
             if tt > 0:
                 return now + tt
             else:
