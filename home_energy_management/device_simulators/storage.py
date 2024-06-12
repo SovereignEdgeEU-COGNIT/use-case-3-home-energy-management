@@ -6,6 +6,7 @@ from phoenixsystems.sem.device import (
     Device,
     DeviceResponse,
     InfoForDevice,
+    METERSIM_NO_UPDATE_SCHEDULED,
 )
 from home_energy_management.device_simulators.device_utils import complex_dot_product, DeviceUserApi
 
@@ -36,7 +37,12 @@ class Storage(Device, DeviceUserApi):
         dt = now - self.last_capacity_update
         self.last_capacity_update = now
         power = complex_dot_product(self.current[0], self.voltage[0]) / 1000.0  # kW
-        self.curr_capacity += power * dt / 3600 * (self.efficiency if power > 0 else 1)
+        power_reduction = min(
+            1.0,
+            (self.max_capacity - self.curr_capacity)
+            / (self.max_capacity * (1 - self.charging_switch_level / 100))
+        )
+        self.curr_capacity += power * dt / 3600 * (self.efficiency * power_reduction if power > 0 else 1)
         self.curr_capacity = (1.0 - self.energy_loss * dt / 100.0) * self.curr_capacity
         self.curr_capacity = max(self.curr_capacity, 0)
 
@@ -55,7 +61,7 @@ class Storage(Device, DeviceUserApi):
             else:
                 return 0
         else:
-            return -1
+            return METERSIM_NO_UPDATE_SCHEDULED
 
     def get_info(self) -> dict[str, Any]:
         self.update_capacity(self.get_time())
@@ -97,12 +103,7 @@ class Storage(Device, DeviceUserApi):
             if self.curr_capacity == self.max_capacity:
                 self.current[0] = 0.0
             else:
-                power_reduction = min(
-                    self.max_charge_rate,
-                    (self.max_capacity - self.curr_capacity)
-                    / (self.max_capacity * (1 - self.charging_switch_level / 100))
-                )
-                max_current = power_reduction * self.max_power * 1000 / info.voltage[0].real
+                max_current = self.max_charge_rate * self.max_power * 1000 / info.voltage[0].real
                 self.current[0] = min(-pv_current[0].real, max_current)
 
     def update(self, info: InfoForDevice) -> DeviceResponse:
