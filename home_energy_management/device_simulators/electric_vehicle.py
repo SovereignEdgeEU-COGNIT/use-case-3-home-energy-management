@@ -157,9 +157,6 @@ class ScheduledEVDriving(AbstractEVDriving, ScheduledDevice):
         _, next_update_time = self.get_state(now)
         return next_update_time
 
-    def update(self, info: InfoForDevice) -> DeviceResponse:
-        return DeviceResponse([0, 0, 0], METERSIM_NO_UPDATE_SCHEDULED)
-
 
 class LiveEVDriving(AbstractEVDriving):
     driving_power: float
@@ -168,7 +165,7 @@ class LiveEVDriving(AbstractEVDriving):
     def __init__(
             self,
             driving_power: float,
-            next_update_time: int = -1):
+            next_update_time: int = METERSIM_NO_UPDATE_SCHEDULED):
         self.driving_power = driving_power
         self.next_update_time = next_update_time
 
