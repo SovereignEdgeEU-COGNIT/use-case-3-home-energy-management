@@ -174,3 +174,9 @@ class LiveEVDriving(AbstractEVDriving):
 
     def get_next_update_time(self, now: int) -> int:
         return self.next_update_time
+
+    def update_state(self,
+                     driving_power: float,
+                     next_update_time: int):
+        self.driving_power = driving_power
+        self.next_update_time = next_update_time
