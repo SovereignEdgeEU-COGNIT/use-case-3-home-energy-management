@@ -16,7 +16,7 @@ ideal models of end devices, so can compute energy distributed between them duri
 can be used locally or offloaded to COGNIT server. 
 Input parameters:
 - model_parameters - parameters defining the home energy management model; dict with values for keys: 
-heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity, storage_delta_power_perc,
+heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity, delta_charging_power_perc,
 - step_timedelta_s - duration of one step in seconds,
 - storage_parameters - parameters defining the energy storage model; dict with values for keys: max_capacity, 
 min_charge_level, efficiency, nominal_power,
