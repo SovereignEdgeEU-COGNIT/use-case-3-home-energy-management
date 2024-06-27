@@ -83,5 +83,7 @@ E_t = E_{t-1} + s_t * \eta * P_heat * \delta t + C *(T_{out, t} - T_{t-1}) * \de
 
 #### Electric Vehicle
 The charging/discharging model of an electric car battery when connected to a charger is the same as in the case of a 
-storage. However, it can only be used when the car is connected, otherwise the car's battery is discharged according to 
-the assumed load associated with driving the vehicle.
+storage. However, it can only be used when the car is connected (driving power is set to 0), otherwise the car's battery 
+is discharged monotonously according to the assumed load associated with driving the vehicle. For simplicity, the car 
+cannot be recharged or stopped outside - when driving power changes to 0, it is interpreted as arriving and connecting 
+to the home charger.
