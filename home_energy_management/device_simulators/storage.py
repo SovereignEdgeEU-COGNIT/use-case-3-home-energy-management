@@ -68,9 +68,11 @@ class Storage(Device, DeviceUserApi):
         return {
             "max_capacity": self.max_capacity,
             "min_charge_level": self.min_charge_level,
+            "charging_switch_level": self.charging_switch_level,
             "curr_charge_level": self.curr_capacity / self.max_capacity * 100,
             "nominal_power": self.max_power,
             "efficiency": self.efficiency,
+            "energy_loss": self.energy_loss,
         }
 
     def set_params(self, params: dict[str, Any]) -> None:
