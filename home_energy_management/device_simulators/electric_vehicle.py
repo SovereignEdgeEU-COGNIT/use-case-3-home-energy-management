@@ -1,6 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable, Any, Optional
 
 from phoenixsystems.sem.device import (
@@ -37,7 +38,6 @@ class ElectricVehicle(Device, DeviceUserApi):
 
     # Utils
     last_capacity_update: int
-    get_time_until_charged: Callable[[int], int]  # s
     voltage: list[complex]  # V
 
     def update_capacity(self, now: int) -> int:
@@ -93,7 +93,6 @@ class ElectricVehicle(Device, DeviceUserApi):
             "efficiency": self.efficiency,
             "is_available": self.is_available,
             "driving_power": self.get_driving_power(now),
-            "time_until_charged": self.get_time_until_charged(now),
         }
 
     def set_params(self, params: dict[str, Any]) -> None:
@@ -133,83 +132,105 @@ class ElectricVehicle(Device, DeviceUserApi):
         return DeviceResponse(self.current, self.update_capacity(info.now))
 
 
-class AbstractEVDriving(Device, DeviceUserApi, ABC):
+class EVDriving(Device, DeviceUserApi, ABC):
     @abstractmethod
     def get_driving_power(self, now: int) -> float:
-        pass
-
-    @abstractmethod
-    def get_time_until_charged(self, now: int) -> int:
         pass
 
     def update(self, info: InfoForDevice) -> DeviceResponse:
         return DeviceResponse([0.0, 0.0, 0.0], METERSIM_NO_UPDATE_SCHEDULED)
 
 
-class ScheduledEVDriving(AbstractEVDriving, ScheduledDevice):
+class ScheduledEVDriving(EVDriving, ScheduledDevice):
     def __init__(
             self,
             config: list[tuple[float, Any]],
             loop: int = 0):
-        AbstractEVDriving.__init__(self)
+        EVDriving.__init__(self)
         ScheduledDevice.__init__(self, config, loop)
 
     def get_driving_power(self, now: int) -> float:
         driving_power, _ = self.get_state(now)
         return driving_power
 
-    def get_time_until_charged(self, now: int) -> int:
-        driving_power, next_update_time = self.get_state(now)
-        return -1 if driving_power > 0 or next_update_time == METERSIM_NO_UPDATE_SCHEDULED else next_update_time - now
-
     def get_info(self) -> dict[str, Any]:
         now = self.get_time()
-        return {
-            "driving_power": self.get_driving_power(now),
-            "time_until_charged": self.get_time_until_charged(now),
-        }
+        return {"driving_power": self.get_driving_power(now)}
 
     def set_params(self, params: dict[str, Any]) -> None:
         pass
 
 
-class LiveEVDriving(AbstractEVDriving):
+class LiveEVDriving(EVDriving):
     driving_power: float
-    next_ev_charged_time: int
 
-    def __init__(
-            self,
-            driving_power: float,
-            time_until_charged_h: Optional[float] = None):
-        AbstractEVDriving.__init__(self)
-        self.driving_power = driving_power
-        self.next_ev_charged_time = int(time_until_charged_h * 3600)
+    def __init__(self, driving_power: float,):
+        EVDriving.__init__(self)
+        self.driving_power = float(driving_power)
+
+    def set_driving_power(self, driving_power: float):
+        self.driving_power = float(driving_power)
 
     def get_driving_power(self, now: int):
         return self.driving_power
 
-    def get_time_until_charged(self, now: int) -> int:
-        left_time = self.next_ev_charged_time - now
-        return -1 if (left_time <= 0
-                      or self.driving_power > 0
-                      or self.next_ev_charged_time == METERSIM_NO_UPDATE_SCHEDULED) else left_time
-
     def get_info(self) -> dict[str, Any]:
-        now = self.get_time()
-        return {
-            "driving_power": self.driving_power,
-            "time_until_charged": self.get_time_until_charged(now),
-        }
+        return {"driving_power": self.driving_power}
 
     def set_params(self, params: dict[str, Any]) -> None:
         pass
 
-    def update_state(self,
-                     driving_power: float,
-                     time_until_charged_h: Optional[float] = None):
-        self.driving_power = driving_power
-        if time_until_charged_h:
-            self.next_ev_charged_time = self.get_time() + int(time_until_charged_h * 3600)
-        else:
-            self.next_ev_charged_time = METERSIM_NO_UPDATE_SCHEDULED
+
+class EVDeparturePlans(Device, ABC):
+    @abstractmethod
+    def get_time_until_departure(self) -> float:
+        pass
+
+    def update(self, info: InfoForDevice) -> DeviceResponse:
+        return DeviceResponse([0.0, 0.0, 0.0], METERSIM_NO_UPDATE_SCHEDULED)
+
+
+class ScheduledEVDeparturePlans(EVDeparturePlans, ScheduledDevice, Device):
+    def __init__(
+            self,
+            config: list[tuple[int, Any]],
+            loop: int = 0):
+        EVDeparturePlans.__init__(self)
+        ScheduledDevice.__init__(self, config, loop)
+
+    def get_time_until_departure(self) -> int:
+        now = self.get_time()
+        _, next_update_time = self.get_state(now)
+        update_driving_power = 0.
+        time = now
+        while update_driving_power == 0.:
+            time = next_update_time
+            if next_update_time == METERSIM_NO_UPDATE_SCHEDULED:
+                return -1
+            update_driving_power, next_update_time = self.get_state(time)
+        return time - now
+
+
+class LiveEVDeparturePlans(EVDeparturePlans):
+    next_ev_departure_time: int = METERSIM_NO_UPDATE_SCHEDULED
+
+    def __init__(self, ev_departure_planned_time: Optional[str] = None):
+        if ev_departure_planned_time:
+            self.next_ev_departure_time = self.__strptime_to_seconds_from_start(ev_departure_planned_time)
+
+    def get_time_until_departure(self) -> int:
+        left_time = self.next_ev_departure_time - self.get_time()
+        return -1 if (left_time <= 0
+                      or self.next_ev_departure_time == METERSIM_NO_UPDATE_SCHEDULED) else left_time
+
+    def update_state(self, ev_departure_planned_time: str):
+        next_ev_departure_time = self.__strptime_to_seconds_from_start(ev_departure_planned_time)
+        seconds_in_day = timedelta(days=1).total_seconds()
+        next_ev_departure_time += (self.get_time() // seconds_in_day) * seconds_in_day
+        self.next_ev_departure_time = next_ev_departure_time
         self.notify()
+
+    def __strptime_to_seconds_from_start(self, time_as_string: str) -> int:
+        t = datetime.strptime(time_as_string, "%H:%M")
+        time_in_seconds = timedelta(hours=t.hour, minutes=t.minute).total_seconds()
+        return int(time_in_seconds)
