@@ -45,13 +45,13 @@ def run_one_step(
 
     Returns:
         Configurations and predicted state after cycle:
-        - configuration of temperature per room,
-        - configuration of EV battery (charging and discharging power limits [percent of nominal power], mode),
+        - configuration of temperature per room in °C,
         - configuration of energy storage (charging and discharging power limits [percent of nominal power], mode),
-        - predicted temperature per room,
-        - predicted charge level of energy storage,
-        - predicted charge level of EV battery,
-        - predicted energy needed from power grid.
+        - configuration of EV battery (charging and discharging power limits [percent of nominal power], mode),
+        - predicted temperature per room in °C,
+        - predicted charge level of energy storage in %,
+        - predicted charge level of EV battery in %,
+        - predicted energy needed from power grid in kWh.
     """
 
     def check_heating_conditions(
