@@ -46,6 +46,10 @@ class ElectricVehicle(Device, DeviceUserApi):
 
         driving_power = self.get_driving_power(now)
         if driving_power > 0:
+            self.is_available = False
+            self.operation_mode = 0
+            self.current[0] = 0
+
             self.curr_capacity -= driving_power * dt / 3600
             self.curr_capacity = max(self.curr_capacity, EPSILON)
             tt = math.ceil(self.curr_capacity / driving_power * 3600)
@@ -53,6 +57,8 @@ class ElectricVehicle(Device, DeviceUserApi):
                 return now + tt
             else:
                 return 0
+
+        self.is_available = True
 
         power = complex_dot_product(self.current[0], self.voltage[0]) / 1000.0  # kW
         power_reduction = min(
@@ -104,31 +110,21 @@ class ElectricVehicle(Device, DeviceUserApi):
 
     def adjust_current_to_state(self, info: InfoForDevice) -> None:
         self.current[0] = 0
-        self.is_available = True
-
-        if self.get_driving_power(info.now) > 0:
-            self.is_available = False
-            self.operation_mode = 0
-            self.voltage[0] = 0
-            return
 
         self.voltage = info.voltage
         if info.voltage[0] == 0:
             return
 
         if self.operation_mode == 2:
-            if self.curr_capacity <= self.min_charge_level / 100 * self.max_capacity:
-                self.current[0] = 0
-            else:
+            if self.curr_capacity > self.min_charge_level / 100 * self.max_capacity:
                 self.current[0] = self.max_discharge_rate * self.max_power * 1000 / info.voltage[0].real
         if self.operation_mode == 1:
-            if self.curr_capacity == self.max_capacity:
-                self.current[0] = 0
-            else:
+            if self.curr_capacity < self.max_capacity:
                 self.current[0] = self.max_charge_rate * self.max_power * 1000 / info.voltage[0].real
 
     def update(self, info: InfoForDevice) -> DeviceResponse:
-        self.adjust_current_to_state(info)
+        if self.get_driving_power(info.now) == 0.0:
+            self.adjust_current_to_state(info)
         return DeviceResponse(self.current, self.update_capacity(info.now))
 
 
