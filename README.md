@@ -36,8 +36,8 @@ key which is room name,
 
 Returns tuple of variables representing:
 - configuration of temperature per room in °C,
-- configuration of energy storage (charging and discharging power limits [percent of nominal power], mode of operating),
-- configuration of EV battery (charging and discharging power limits [percent of nominal power], mode),
+- configuration of energy storage (charging and discharging power limits [percent of nominal power], mode of operation),
+- configuration of EV battery (charging and discharging power limits [percent of nominal power], mode of operation),
 - predicted temperature per room in °C,
 - predicted charge level of energy storage in %,
 - predicted charge level of EV battery in %,

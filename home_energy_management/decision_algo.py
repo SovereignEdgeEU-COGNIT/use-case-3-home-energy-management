@@ -95,7 +95,7 @@ def run_one_step(
             ev_battery_max_capacity: float,
             ev_battery_efficiency: float,
             time_until_ev_charged: int,
-    ):
+    ) -> bool:
         ev_charging_capacity = ((ev_battery_charged_level - charge_level_of_ev_battery)
                                 / 100 * ev_battery_max_capacity / ev_battery_efficiency)
         if ev_charging_capacity < 0:

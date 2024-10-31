@@ -171,7 +171,7 @@ class LiveEVDriving(EVDriving):
     def set_driving_power(self, driving_power: float):
         self.driving_power = float(driving_power)
 
-    def get_driving_power(self, now: int):
+    def get_driving_power(self, now: int) -> float:
         return self.driving_power
 
     def get_info(self) -> dict[str, Any]:
@@ -202,7 +202,6 @@ class ScheduledEVDeparturePlans(EVDeparturePlans, ScheduledDevice, Device):
         now = self.get_time()
         _, next_update_time = self.get_state(now)
         update_driving_power = 0.
-        time = now
         while update_driving_power == 0.:
             time = next_update_time
             if next_update_time == METERSIM_NO_UPDATE_SCHEDULED:
