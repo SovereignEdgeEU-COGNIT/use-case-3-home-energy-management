@@ -16,10 +16,12 @@ ideal models of end devices, so can compute energy distributed between them duri
 can be used locally or offloaded to COGNIT server. 
 Input parameters:
 - model_parameters - parameters defining the home energy management model; dict with values for keys: 
-heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity, storage_delta_power_perc,
+heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity, delta_charging_power_perc,
 - step_timedelta_s - duration of one step in seconds,
 - storage_parameters - parameters defining the energy storage model; dict with values for keys: max_capacity, 
 min_charge_level, efficiency, nominal_power,
+- ev_battery_parameters - parameters defining the EV battery model; dict with values for keys: max_capacity, 
+charged_level, efficiency, nominal_power, is_available, time_until_charged,
 - room_heating_params_list - parameters defining the heating model for individual rooms; list with dicts, each 
 containing values for keys: name, powers_of_heating_devices,
 - energy_drawn_from_grid - active energy drawn from the grid in the previous step in kWh,
@@ -34,10 +36,11 @@ key which is room name,
 
 Returns tuple of variables representing:
 - configuration of temperature per room in °C,
-- configuration of energy storage (charging and discharging power limits [percent of nominal power] in %, mode of 
-operating),
+- configuration of energy storage (charging and discharging power limits [percent of nominal power], mode of operation),
+- configuration of EV battery (charging and discharging power limits [percent of nominal power], mode of operation),
 - predicted temperature per room in °C,
 - predicted charge level of energy storage in %,
+- predicted charge level of EV battery in %,
 - predicted energy needed from power grid in kWh.
 
 Simple example of usage of decision algorithm is in `example.py`.
