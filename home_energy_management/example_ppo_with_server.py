@@ -29,7 +29,7 @@ EV_REWARD_COEFFICIENT = .8
 data_directory = 'data/'
 model_filename = 'model_scripted_from_cognit.pt'
 
-number_of_episodes = 8000
+number_of_episodes = 100
 # Learning rate for actor-critic models
 critic_lr = 0.001
 actor_lr = 0.001

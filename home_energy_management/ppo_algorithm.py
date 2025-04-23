@@ -55,10 +55,11 @@ def make_decision(
         float(is_ev_available),
         datetime.fromtimestamp(timestamp).hour / 24,
         hours_till_ev_departure / 24,
-        pv_generation / 11,
-        uncontrolled_consumption / 2,
+        pv_generation / 3,
+        uncontrolled_consumption / 3,
         (temp_inside - min_temp_setting) / max_temp_setting,
-        (pref_temp  - min_temp_setting) / max_temp_setting,
+        (pref_temp - temp_window - min_temp_setting) / max_temp_setting,
+        (pref_temp + temp_window - min_temp_setting) / max_temp_setting,
         temp_outside / 30,
         storage_soc / 100,
         ev_soc / 100,
@@ -118,7 +119,7 @@ def training_function(
     from torch.distributions import MultivariateNormal
     from torch.utils.data import TensorDataset, DataLoader
 
-    def get_state(index: int) -> tuple[float, float, float, float, float, float, float, float, float, float]:
+    def get_state(index: int) -> tuple[float, float, float, float, float, float, float, float, float, float, float]:
         ev_driving_power = ev_driving_state["driving_power"]
         hours_till_ev_departure = ev_driving_state["hours_till_departure"]
 
@@ -126,10 +127,11 @@ def training_function(
             float(ev_driving_power == 0.),
             hour / 24,
             hours_till_ev_departure / 24,
-            pv_generation_pred_list[index] / 11,
-            uncontrolled_consumption_pred_list[index] / 2,
+            pv_generation_pred_list[index] / 3,
+            uncontrolled_consumption_pred_list[index] / 3,
             (temp_inside - min_temp_setting) / max_temp_setting,
-            (pref_temperature - min_temp_setting) / max_temp_setting,
+            (pref_temperature - temp_window - min_temp_setting) / max_temp_setting,
+            (pref_temperature + temp_window - min_temp_setting) / max_temp_setting,
             temp_outside_pred_list[index] / 30,
             storage_soc / 100,
             ev_soc / 100,
@@ -460,7 +462,7 @@ def training_function(
 
     lower_bounds = [min_temp_setting, - storage_nominal_power, 0.]
     upper_bounds = [max_temp_setting, storage_nominal_power, ev_nominal_power]
-    state_dim = 10
+    state_dim = 11
     action_dim = len(lower_bounds)
 
     policy = ActorCritic()
@@ -528,5 +530,4 @@ def training_function(
         avg_reward = np.mean(ep_reward_list[-100:])
         logging.debug(f"Episode * {ep} * Avg Reward is ==> {avg_reward} " + f"* Std {action_std}")
 
-    # model_scripted = torch.jit.script(policy_old)
     return policy_old
