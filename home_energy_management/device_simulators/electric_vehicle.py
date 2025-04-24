@@ -20,7 +20,7 @@ class ElectricVehicle(Device, DeviceUserApi):
     max_power: float  # kW
     max_capacity: float  # kWh
     min_charge_level: float  # %
-    charged_level: float  # %
+    driving_charge_level: float  # %
     charging_switch_level: float  # %
     efficiency: float  # 0-1
     energy_loss: float  # %/s
@@ -93,10 +93,12 @@ class ElectricVehicle(Device, DeviceUserApi):
         return {
             "max_capacity": self.max_capacity,
             "min_charge_level": self.min_charge_level,
-            "charged_level": self.charged_level,
+            "driving_charge_level": self.driving_charge_level,
+            "charging_switch_level": self.charging_switch_level,
             "curr_charge_level": self.curr_capacity / self.max_capacity * 100,
             "nominal_power": self.max_power,
             "efficiency": self.efficiency,
+            "energy_loss": self.energy_loss,
             "is_available": self.is_available,
             "driving_power": self.get_driving_power(now),
         }
