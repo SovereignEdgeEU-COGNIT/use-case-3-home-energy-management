@@ -9,7 +9,7 @@ from baseline_algorithm import make_decision
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-      "FLAVOUR": "EnergyV2__16GB_4CPU",
+      "FLAVOUR": "EnergyV2",
       "MIN_ENERGY_RENEWABLE_USAGE": 50,
 }
 
@@ -47,7 +47,7 @@ room_heating_params_list = [{
     "curr_temp": 19.0,  # (°C)
     "preferred_temp": 21.0,  # (°C)
     "powers_of_heating_devices": [8.0, 8.0],
-    "is_device_switch_on": False,
+    "is_device_switch_on": [False, False],
 }]
 
 

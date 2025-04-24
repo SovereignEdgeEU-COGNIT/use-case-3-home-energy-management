@@ -29,7 +29,7 @@ EV_REWARD_COEFFICIENT = .8
 data_directory = 'data/'
 model_filename = 'model_scripted_from_cognit.pt'
 
-number_of_episodes = 100
+number_of_episodes = 8000
 # Learning rate for actor-critic models
 critic_lr = 0.001
 actor_lr = 0.001
@@ -100,9 +100,6 @@ temp_outside_pred_df['value'] = temp_outside_pred_df['value'].values - 272.15
 since_data = np.datetime64('2023-03-15')
 till_train_data = np.datetime64('2023-06-15')
 till_data = np.datetime64('2023-09-15')
-# since_data = max(pv_generation_df.index[0], uncontrolled_consumption_df.index[0], temp_outside_df.index[0])
-# till_data = min(pv_generation_df.index[-1], uncontrolled_consumption_df.index[-1], temp_outside_df.index[-1])
-# till_train_data = since_data + (till_data - since_data) * 2 / 3
 
 pv_generation_train = pv_generation_df.loc[since_data: till_train_data, ['value']]
 pv_generation_test = pv_generation_df.loc[till_train_data: till_data, ['value']]
