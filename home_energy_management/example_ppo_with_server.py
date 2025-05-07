@@ -4,7 +4,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import torch.jit
 from cognit import device_runtime
 
 from ppo_algorithm import make_decision, training_function
@@ -12,8 +11,14 @@ from ppo_algorithm import make_decision, training_function
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2__16GB_4CPU",
+    "FLAVOUR": "EnergyV2__Service_persistent",
     "MIN_ENERGY_RENEWABLE_USAGE": 50,
+}
+
+S3_PARAMETERS = {
+    "endpoint_url": "https://s3.sovereignedge.eu/",
+    "bucket_name": "uc3-test-bucket",
+    "model_filename": "files/onnx_model_from_cognit.onnx",
 }
 
 runtime = device_runtime.DeviceRuntime("cognit.yml")
@@ -114,9 +119,10 @@ temp_outside_test = temp_outside_df.loc[till_train_data: till_data, ['value']]
 temp_outside_pred_train = temp_outside_pred_df.loc[since_data: till_train_data, ['value']]
 temp_outside_pred_test = temp_outside_pred_df.loc[till_train_data: till_data, ['value']]
 
+
 logging.info(" --> Local run training")
 start_time = time.perf_counter()
-model = training_function(
+result = training_function(
     {
         "num_episodes": number_of_episodes,
         "critic_lr": critic_lr,
@@ -136,6 +142,7 @@ model = training_function(
         "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
         "ev_reward_coeff": EV_REWARD_COEFFICIENT,
     },
+    S3_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
@@ -150,11 +157,9 @@ model = training_function(
     temp_outside_pred_train['value'].values,
 )
 end_time = time.perf_counter()
-logging.info(f"Func result: {model = }")
+logging.info(f"Func result: {result = }")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
-model_scripted = torch.jit.script(model)
-model_scripted.save(model_filename)
 
 logging.info(" --> COGNIT run training")
 start_time = time.perf_counter()
@@ -179,6 +184,7 @@ return_code, result = runtime.call(
         "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
         "ev_reward_coeff": EV_REWARD_COEFFICIENT,
     },
+    S3_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
@@ -198,12 +204,8 @@ logging.info(f"Status code: {return_code}")
 logging.info(f"Func result: {result}")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
-model_scripted = torch.jit.script(result)
-model_scripted.save(model_filename)
-
 
 timestamp = datetime.datetime.fromisoformat('2025-03-21 05:00:00')
-
 pv_generation = 3.7
 uncontrolled_consumption = 1.6
 temp_outside = 15.
@@ -213,14 +215,12 @@ ev_battery_parameters["is_available"] = True
 ev_battery_parameters["time_until_charged"] = 3 * 3600  # (s)
 room_heating_params_list[0]["curr_temp"] = 19.0  # (°C)
 
-with open(model_filename, mode='rb') as file:
-    ppo_bytes = file.read()
 
 logging.info(" --> Local run predict 1")
 start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
-    model_bytes=ppo_bytes,
+    s3_parameters=S3_PARAMETERS,
     home_model_parameters=home_model_parameters,
     storage_parameters=storage_parameters,
     ev_battery_parameters=ev_battery_parameters,
@@ -238,7 +238,7 @@ logging.info(" --> Local run predict 2")
 start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
-    model_bytes=ppo_bytes,
+    s3_parameters=S3_PARAMETERS,
     home_model_parameters=home_model_parameters,
     storage_parameters=storage_parameters,
     ev_battery_parameters=ev_battery_parameters,
@@ -252,12 +252,13 @@ end_time = time.perf_counter()
 logging.info(f"Func result 2: {action = }")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
+
 logging.info(" --> COGNIT run predict 1")
 start_time = time.perf_counter()
 return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
-    ppo_bytes,
+    S3_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
@@ -278,7 +279,7 @@ start_time = time.perf_counter()
 return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
-    ppo_bytes,
+    S3_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,

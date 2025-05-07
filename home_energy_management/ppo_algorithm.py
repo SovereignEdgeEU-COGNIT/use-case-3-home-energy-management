@@ -1,11 +1,10 @@
 from typing import Any
 
 import numpy as np
-import torch
 
 def make_decision(
         timestamp: float,
-        model_bytes: bytes,
+        s3_parameters: dict[str, str],
         home_model_parameters: dict[str, float],
         storage_parameters: dict[str, float],
         ev_battery_parameters: dict[str, float],
@@ -15,29 +14,33 @@ def make_decision(
         temp_outside: float,
         cycle_timedelta_s: int,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    import io
     from datetime import datetime
+    from io import BytesIO
 
+    import boto3
     import numpy as np
+    import onnx
     import torch
+    from onnx2torch import convert
 
-    def select_action(jit_model: torch.jit.RecursiveScriptModule,
-                      tensor_state: torch.Tensor) -> np.ndarray:
+    def select_action(actor_model: torch.fx.graph_module.GraphModule,
+                      tensor_state: torch.Tensor,
+                      lower_bounds: list[float],
+                      upper_bounds: list[float]) -> np.ndarray:
         with torch.no_grad():
             tensor_state = torch.FloatTensor(tensor_state).to(device)
-            tensor_action = jit_model.actor(tensor_state)
+            tensor_action = actor_model(tensor_state)
 
         tensor_action = tensor_action.detach().cpu().numpy().flatten()
-        tensor_action[0] = tensor_action[0] * (jit_model.upper_bounds[0] - jit_model.lower_bounds[0]) / 2 + (
-                jit_model.upper_bounds[0] + jit_model.lower_bounds[0]) / 2
-        tensor_action[1] = tensor_action[1] * jit_model.upper_bounds[1]
-        tensor_action[2] = (tensor_action[2] + 1) * jit_model.upper_bounds[2] / 2
-        tensor_action = np.clip(tensor_action, jit_model.lower_bounds, jit_model.upper_bounds)
+        tensor_action[0] = tensor_action[0] * (upper_bounds[0] - lower_bounds[0]) / 2 + (
+                upper_bounds[0] + lower_bounds[0]) / 2
+        tensor_action[1] = tensor_action[1] * upper_bounds[1]
+        tensor_action[2] = (tensor_action[2] + 1) * upper_bounds[2] / 2
+        tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = torch.jit.load(io.BytesIO(model_bytes))
 
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
@@ -50,6 +53,20 @@ def make_decision(
     temp_inside = np.mean(np.array([room["curr_temp"] for room in room_heating_params_list]))
     pref_temp = np.mean(np.array([room["preferred_temp"] for room in room_heating_params_list]))
     temp_window = home_model_parameters["heating_delta_temperature"]
+    lower_bounds = [min_temp_setting, - storage_max_charging_power, 0.]
+    upper_bounds = [max_temp_setting, storage_max_charging_power, ev_max_charging_power]
+
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=s3_parameters["endpoint_url"],
+        # aws_access_key_id=s3_parameters["access_key_id"],
+        # aws_secret_access_key=s3_parameters["secret_access_key"],
+    )
+    stream = BytesIO()
+    s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=s3_parameters["model_filename"], Fileobj=stream)
+    stream.seek(0)
+    onnx_model = onnx.load_model_from_string(stream.getvalue())
+    model = convert(onnx_model)
 
     state = (
         float(is_ev_available),
@@ -65,7 +82,12 @@ def make_decision(
         ev_soc / 100,
     )
 
-    action = select_action(model, torch.tensor(state, dtype=torch.float).unsqueeze(0))
+    action = select_action(
+        model,
+        torch.tensor(state, dtype=torch.float).unsqueeze(0),
+        lower_bounds,
+        upper_bounds,
+    )
     (temp_setting, storage_charging_power, ev_charging_power) = action
 
     conf_temp_per_room = {}
@@ -96,6 +118,7 @@ def make_decision(
 
 def training_function(
         train_parameters: dict[str, Any],
+        s3_parameters: dict[str, str],
         home_model_parameters: dict[str, Any],
         storage_parameters: dict[str, float],
         ev_battery_parameters: dict[str, float],
@@ -108,11 +131,12 @@ def training_function(
         uncontrolled_consumption_pred_train: np.ndarray[float],
         temp_outside_train: np.ndarray[float],
         temp_outside_pred_train: np.ndarray[float],
-
-) -> torch.nn.Module:
+) -> list[float]:
     import logging
     import math
+    from io import BytesIO
 
+    import boto3
     import numpy as np
     import torch
     from torch import nn
@@ -530,4 +554,28 @@ def training_function(
         avg_reward = np.mean(ep_reward_list[-100:])
         logging.debug(f"Episode * {ep} * Avg Reward is ==> {avg_reward} " + f"* Std {action_std}")
 
-    return policy_old
+    example_state = get_state(index=0)
+    example_inputs = (torch.FloatTensor(torch.tensor(example_state, dtype=torch.float).unsqueeze(0).to(device)), )
+    tmp_stream = BytesIO()
+    torch.onnx.export(
+        policy_old.actor,
+        example_inputs,
+        tmp_stream,  # where to save the model (can be a file or file-like object)
+        export_params=True,
+        opset_version=10,
+        do_constant_folding=True,
+        input_names = ['input'],
+        output_names = ['output'],
+        dynamic_axes={'input' : {0 : 'batch_size'},
+                      'output' : {0 : 'batch_size'}}
+    )
+    tmp_stream.seek(0)
+
+    s3 = boto3.resource(
+        "s3",
+        endpoint_url=s3_parameters["endpoint_url"],
+    )
+    bucket = s3.Bucket(s3_parameters["bucket_name"])
+    bucket.put_object(Key=s3_parameters["model_filename"], Body=tmp_stream.getvalue())
+
+    return ep_reward_list

@@ -9,8 +9,8 @@ from baseline_algorithm import make_decision
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-      "FLAVOUR": "EnergyV2",
-      "MIN_ENERGY_RENEWABLE_USAGE": 50,
+    "FLAVOUR": "EnergyV2__Service_persistent",
+    "MIN_ENERGY_RENEWABLE_USAGE": 50,
 }
 
 timestamp = datetime.datetime.fromisoformat('2025-03-21 05:00:00')
