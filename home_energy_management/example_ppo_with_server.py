@@ -11,7 +11,7 @@ from ppo_algorithm import make_decision, training_function
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2__Service_persistent",
+    "FLAVOUR": "EnergyV2__16GB_4CPU_torch_onnx",
     "MIN_ENERGY_RENEWABLE_USAGE": 50,
 }
 

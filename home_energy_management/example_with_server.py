@@ -9,7 +9,7 @@ from baseline_algorithm import make_decision
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2__Service_persistent",
+    "FLAVOUR": "EnergyV2",
     "MIN_ENERGY_RENEWABLE_USAGE": 50,
 }
 
