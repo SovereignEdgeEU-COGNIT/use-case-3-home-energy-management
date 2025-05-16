@@ -15,6 +15,25 @@ REQS_INIT = {
 
 timestamp = datetime.datetime.fromisoformat('2025-03-21 05:00:00')
 
+BESMART_PARAMETERS = {
+    "workspace_key": "wubbalubbadubdub",
+    "login": "cognit_demo",
+    "password": "CognitDemo2025!",
+    "pv_generation": {
+        "cid": 68,
+        "mid": 84,
+        "moid": 70,
+    },
+    "energy_consumption": {
+        "cid": 68,
+        "mid": 83,
+        "moid": 32,
+    },
+    "temperature_moid": 139,
+    "since": datetime.datetime.fromisoformat('2023-03-15'),
+    "till": datetime.datetime.fromisoformat('2023-06-15'),
+}
+
 model_parameters = {
     "heating_delta_temperature": 0.75,
     "heating_coefficient": 0.98,
@@ -55,14 +74,12 @@ room_heating_params_list = [{
 (configuration_of_temp_per_room,
  configuration_of_energy_storage,
  configuration_of_ev_battery,) = make_decision(timestamp=timestamp.timestamp(),
-                                               trained_model=None,
+                                               s3_parameters=None,
+                                               besmart_parameters=BESMART_PARAMETERS,
                                                home_model_parameters=model_parameters,
                                                storage_parameters=storage_parameters,
                                                ev_battery_parameters=ev_parameters,
                                                room_heating_params_list=room_heating_params_list,
-                                               energy_pv_production=3.7,
-                                               uncontrolled_energy_consumption=1.6,
-                                               temp_outside=15.,
                                                cycle_timedelta_s=3600,)
 
 logging.info(f'{configuration_of_temp_per_room = }')

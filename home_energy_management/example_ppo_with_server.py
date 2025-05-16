@@ -2,8 +2,6 @@ import datetime
 import logging
 import time
 
-import numpy as np
-import pandas as pd
 from cognit import device_runtime
 
 from ppo_algorithm import make_decision, training_function
@@ -11,7 +9,7 @@ from ppo_algorithm import make_decision, training_function
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2__16GB_4CPU_torch_onnx",
+    "FLAVOUR": "EnergyV2__16GB_1CPU",
     "MIN_ENERGY_RENEWABLE_USAGE": 50,
 }
 
@@ -20,6 +18,27 @@ S3_PARAMETERS = {
     "bucket_name": "uc3-test-bucket",
     "model_filename": "files/onnx_model_from_cognit.onnx",
 }
+
+BESMART_PARAMETERS = {
+    "workspace_key": "wubbalubbadubdub",
+    "login": "cognit_demo",
+    "password": "CognitDemo2025!",
+    "pv_generation": {
+        "cid": 68,
+        "mid": 84,
+        "moid": 70,
+    },
+    "energy_consumption": {
+        "cid": 68,
+        "mid": 83,
+        "moid": 32,
+    },
+    "temperature_moid": 139,
+    "since": datetime.datetime.fromisoformat('2023-03-15'),
+    "till": datetime.datetime.fromisoformat('2023-06-15'),
+}
+
+cycle_timedelta_s = 3600
 
 runtime = device_runtime.DeviceRuntime("cognit.yml")
 runtime.init(REQS_INIT)
@@ -56,11 +75,11 @@ home_model_parameters = {
     "heat_loss_coefficient": 300.,
     "heat_capacity": 3.6e7,
     "ev_driving_schedule": {
-        "hour": [0., 8., 15., 20., 22.],
+        "time": ["0:00", "8:00", "15:00", "20:00", "22:00"],
         "driving_power": [0., 5., 0., 8., 0.],
     },
     "pref_temp_schedule": {
-        "hour": [0., 7., 9., 17., 23.],
+        "time": ["0:00", "7:00", "9:00", "17:00", "23:00"],
         "temp": [18., 20, 18., 21., 19.],
     },
 }
@@ -87,38 +106,6 @@ room_heating_params_list = [{
     "powers_of_heating_devices": [8.0, 8.0],  # (kW)
 }]
 
-pv_generation_df  = pd.read_csv(data_directory + 'pv_generation.csv', index_col=0)
-pv_generation_df.index = pd.to_datetime(pv_generation_df.index)
-pv_generation_pred_df  = pd.read_csv(data_directory + 'pv_generation_prediction.csv', index_col=0)
-pv_generation_pred_df.index = pd.to_datetime(pv_generation_pred_df.index)
-uncontrolled_consumption_df  = pd.read_csv(data_directory + 'uncontrolled_consumption.csv', index_col=0)
-uncontrolled_consumption_df.index = pd.to_datetime(uncontrolled_consumption_df.index)
-uncontrolled_consumption_pred_df  = pd.read_csv(data_directory + 'uncontrolled_consumption_prediction.csv', index_col=0)
-uncontrolled_consumption_pred_df.index = pd.to_datetime(uncontrolled_consumption_pred_df.index)
-temp_outside_df  = pd.read_csv(data_directory + 'temp_outside.csv', index_col=0)
-temp_outside_df.index = pd.to_datetime(temp_outside_df.index)
-temp_outside_df['value'] = temp_outside_df['value'].values - 272.15
-temp_outside_pred_df  = pd.read_csv(data_directory + 'temp_outside_prediction.csv', index_col=0)
-temp_outside_pred_df.index = pd.to_datetime(temp_outside_pred_df.index)
-temp_outside_pred_df['value'] = temp_outside_pred_df['value'].values - 272.15
-
-since_data = np.datetime64('2023-03-15')
-till_train_data = np.datetime64('2023-06-15')
-till_data = np.datetime64('2023-09-15')
-
-pv_generation_train = pv_generation_df.loc[since_data: till_train_data, ['value']]
-pv_generation_test = pv_generation_df.loc[till_train_data: till_data, ['value']]
-pv_generation_pred_train = pv_generation_pred_df.loc[since_data: till_train_data, ['value']]
-pv_generation_pred_test = pv_generation_pred_df.loc[till_train_data: till_data, ['value']]
-uncontrolled_consumption_train = uncontrolled_consumption_df.loc[since_data: till_train_data, ['value']]
-uncontrolled_consumption_test = uncontrolled_consumption_df.loc[till_train_data: till_data, ['value']]
-uncontrolled_consumption_pred_train = uncontrolled_consumption_pred_df.loc[since_data: till_train_data, ['value']]
-uncontrolled_consumption_pred_test = uncontrolled_consumption_pred_df.loc[till_train_data: till_data, ['value']]
-temp_outside_train = temp_outside_df.loc[since_data: till_train_data, ['value']]
-temp_outside_test = temp_outside_df.loc[till_train_data: till_data, ['value']]
-temp_outside_pred_train = temp_outside_pred_df.loc[since_data: till_train_data, ['value']]
-temp_outside_pred_test = temp_outside_pred_df.loc[till_train_data: till_data, ['value']]
-
 
 logging.info(" --> Local run training")
 start_time = time.perf_counter()
@@ -143,18 +130,12 @@ result = training_function(
         "ev_reward_coeff": EV_REWARD_COEFFICIENT,
     },
     S3_PARAMETERS,
+    BESMART_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
     room_heating_params_list[0],
-    3600,
-    pv_generation_train.index.hour.values,
-    pv_generation_train['value'].values,
-    pv_generation_pred_train['value'].values,
-    uncontrolled_consumption_train['value'].values,
-    uncontrolled_consumption_pred_train['value'].values,
-    temp_outside_train['value'].values,
-    temp_outside_pred_train['value'].values,
+    cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 logging.info(f"Func result: {result = }")
@@ -185,18 +166,12 @@ return_code, result = runtime.call(
         "ev_reward_coeff": EV_REWARD_COEFFICIENT,
     },
     S3_PARAMETERS,
+    BESMART_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
     room_heating_params_list[0],
-    3600,
-    pv_generation_train.index.hour.values,
-    pv_generation_train['value'].values,
-    pv_generation_pred_train['value'].values,
-    uncontrolled_consumption_train['value'].values,
-    uncontrolled_consumption_pred_train['value'].values,
-    temp_outside_train['value'].values,
-    temp_outside_pred_train['value'].values,
+    cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 
@@ -205,10 +180,7 @@ logging.info(f"Func result: {result}")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
 
-timestamp = datetime.datetime.fromisoformat('2025-03-21 05:00:00')
-pv_generation = 3.7
-uncontrolled_consumption = 1.6
-temp_outside = 15.
+timestamp = datetime.datetime.fromisoformat('2023-06-16 05:00:00')
 storage_parameters["curr_charge_level"] = 50.0  # (%)
 ev_battery_parameters["curr_charge_level"] = 50.0  # (%)
 ev_battery_parameters["is_available"] = True
@@ -221,14 +193,12 @@ start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
     s3_parameters=S3_PARAMETERS,
+    besmart_parameters=BESMART_PARAMETERS,
     home_model_parameters=home_model_parameters,
     storage_parameters=storage_parameters,
     ev_battery_parameters=ev_battery_parameters,
     room_heating_params_list=room_heating_params_list,
-    pv_generation=pv_generation,
-    uncontrolled_consumption=uncontrolled_consumption,
-    temp_outside=temp_outside,
-    cycle_timedelta_s=3600,
+    cycle_timedelta_s=cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 logging.info(f"Func result 1: {action = }")
@@ -239,14 +209,12 @@ start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
     s3_parameters=S3_PARAMETERS,
+    besmart_parameters=BESMART_PARAMETERS,
     home_model_parameters=home_model_parameters,
     storage_parameters=storage_parameters,
     ev_battery_parameters=ev_battery_parameters,
     room_heating_params_list=room_heating_params_list,
-    pv_generation=pv_generation,
-    uncontrolled_consumption=uncontrolled_consumption,
-    temp_outside=temp_outside,
-    cycle_timedelta_s=3600,
+    cycle_timedelta_s=cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 logging.info(f"Func result 2: {action = }")
@@ -259,14 +227,12 @@ return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
     S3_PARAMETERS,
+    BESMART_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
     room_heating_params_list,
-    pv_generation,
-    uncontrolled_consumption,
-    temp_outside,
-    3600,
+    cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 
@@ -280,14 +246,12 @@ return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
     S3_PARAMETERS,
+    BESMART_PARAMETERS,
     home_model_parameters,
     storage_parameters,
     ev_battery_parameters,
     room_heating_params_list,
-    pv_generation,
-    uncontrolled_consumption,
-    temp_outside,
-    3600,
+    cycle_timedelta_s,
 )
 end_time = time.perf_counter()
 
