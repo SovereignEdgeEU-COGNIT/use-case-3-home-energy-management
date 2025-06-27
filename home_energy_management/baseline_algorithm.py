@@ -1,16 +1,13 @@
-from typing import Any
-
-
 def make_decision(
         timestamp: float,
         s3_parameters,
-        besmart_parameters: dict[str, Any],
-        home_model_parameters: dict[str, float],
-        storage_parameters: dict[str, float],
-        ev_battery_parameters: dict[str, float | int],
-        room_heating_params_list: list[dict],
+        besmart_parameters: str,
+        home_model_parameters: str,
+        storage_parameters: str,
+        ev_battery_parameters: str,
+        room_heating_params_list: str,
         cycle_timedelta_s: int,
-) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+) -> tuple[str, str, str]:
     """
     The algorithm retrieves information about all controller settings and current values. Based on them, it determines
     parameters for the next cycle.
@@ -19,29 +16,30 @@ def make_decision(
     Args:
         timestamp (float): Current timestamp, for which decision is made.
         s3_parameters: For this implementation parameter is ignored as not needed.
-        besmart_parameters (dict[str, Any]): Parameters used for authentication to besmart API and downloading data;
+        besmart_parameters (str): JSON with parameters used for authentication to besmart API and downloading data;
             dict with values for keys: workspace_key, login, password, pv_generation, energy_consumption,
             temperature_moid.
-        home_model_parameters (dict[str, float]): Parameters defining the home energy management model; dict with values
+        home_model_parameters (str): JSON with parameters defining the home energy management model; dict with values
             for keys: heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity,
             delta_charging_power_perc.
-        storage_parameters (dict[str, float]): Parameters defining the energy storage model; dict with values for keys:
+        storage_parameters (str): JSON with parameters defining the energy storage model; dict with values for keys:
             max_capacity, min_charge_level, efficiency, nominal_power, curr_charge_level.
-        ev_battery_parameters (dict[str, float]): Parameters defining the EV battery model; dict with values for keys:
+        ev_battery_parameters (str): JSON with parameters defining the EV battery model; dict with values for keys:
             max_capacity, driving_charge_level, efficiency, nominal_power, is_available, time_until_charged,
             curr_charge_level.
-        room_heating_params_list (list[dict]): Parameters defining the heating model for individual rooms; list with
+        room_heating_params_list (str): JSON with parameters defining the heating model for individual rooms; list with
             dicts, each containing values for keys: name, curr_temp, preferred_temp, powers_of_heating_devices,
             is_device_switch_on.
         cycle_timedelta_s (int): Time duration of one cycle in seconds.
 
     Returns:
-        Configurations for next cycle:
+        Configurations for next cycle in JSONs:
         - configuration of temperature per room in °C,
         - configuration of energy storage (charging and discharging power limits [percent of nominal power], mode),
         - configuration of EV battery (charging and discharging power limits [percent of nominal power], mode).
     """
     import datetime
+    import json
 
     import numpy as np
     import requests
@@ -204,6 +202,12 @@ def make_decision(
 
         return 0.0, 0.0, energy_needed - energy_pv_produced - energy_in_storage
 
+
+    besmart_parameters = json.loads(besmart_parameters)
+    home_model_parameters = json.loads(home_model_parameters)
+    storage_parameters = json.loads(storage_parameters)
+    ev_battery_parameters = json.loads(ev_battery_parameters)
+    room_heating_params_list = json.loads(room_heating_params_list)
 
     state_datetime = datetime.datetime.fromtimestamp(timestamp)
     cycle_timedelta_min = cycle_timedelta_s // 60
@@ -370,7 +374,7 @@ def make_decision(
         )
 
     return (
-        temp_per_room_configuration,
-        energy_storage_configuration,
-        ev_battery_configuration,
+        json.dumps(temp_per_room_configuration),
+        json.dumps(energy_storage_configuration),
+        json.dumps(ev_battery_configuration),
     )

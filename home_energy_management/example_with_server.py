@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import time
 
@@ -15,7 +16,7 @@ REQS_INIT = {
 
 timestamp = datetime.datetime.fromisoformat('2025-03-21 05:00:00')
 
-BESMART_PARAMETERS = {
+besmart_parameters = {
     "workspace_key": "wubbalubbadubdub",
     "login": "cognit_demo",
     "password": "CognitDemo2025!",
@@ -71,20 +72,18 @@ room_heating_params_list = [{
 
 
 # Sanity check that algo runs locally
-(configuration_of_temp_per_room,
- configuration_of_energy_storage,
- configuration_of_ev_battery,) = make_decision(timestamp=timestamp.timestamp(),
-                                               s3_parameters=None,
-                                               besmart_parameters=BESMART_PARAMETERS,
-                                               home_model_parameters=model_parameters,
-                                               storage_parameters=storage_parameters,
-                                               ev_battery_parameters=ev_parameters,
-                                               room_heating_params_list=room_heating_params_list,
-                                               cycle_timedelta_s=3600,)
+result = make_decision(
+    timestamp=timestamp.timestamp(),
+    s3_parameters=None,
+    besmart_parameters=json.dumps(besmart_parameters),
+    home_model_parameters=json.dumps(model_parameters),
+    storage_parameters=json.dumps(storage_parameters),
+    ev_battery_parameters=json.dumps(ev_parameters),
+    room_heating_params_list=json.dumps(room_heating_params_list),
+    cycle_timedelta_s=3600,
+)
 
-logging.info(f'{configuration_of_temp_per_room = }')
-logging.info(f'{configuration_of_energy_storage = }')
-logging.info(f'{configuration_of_ev_battery = }')
+logging.info("Func result: " + str(result))
 
 
 runtime = device_runtime.DeviceRuntime("cognit.yml")
@@ -97,13 +96,11 @@ return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
     None,
-    model_parameters,
-    storage_parameters,
-    ev_parameters,
-    room_heating_params_list,
-    3.7,
-    1.6,
-    15.,
+    json.dumps(besmart_parameters),
+    json.dumps(model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_parameters),
+    json.dumps(room_heating_params_list),
     3600,
 )
 end_time = time.perf_counter()

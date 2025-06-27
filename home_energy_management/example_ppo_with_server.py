@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import time
 
@@ -17,6 +18,8 @@ S3_PARAMETERS = {
     "endpoint_url": "https://s3.sovereignedge.eu/",
     "bucket_name": "uc3-test-bucket",
     "model_filename": "files/onnx_model_from_cognit.onnx",
+    "access_key_id": "eXuxY2Gt4bI8PTScQ9gz",
+    "secret_access_key": "RtomdwwpoN7tkQe6ZZSPZTGScvQ0GtEwVhObreo4",
 }
 
 BESMART_PARAMETERS = {
@@ -34,8 +37,8 @@ BESMART_PARAMETERS = {
         "moid": 32,
     },
     "temperature_moid": 139,
-    "since": datetime.datetime.fromisoformat('2023-03-15'),
-    "till": datetime.datetime.fromisoformat('2023-06-15'),
+    "since": datetime.datetime.fromisoformat('2023-03-15').timestamp(),
+    "till": datetime.datetime.fromisoformat('2023-06-15').timestamp(),
 }
 
 cycle_timedelta_s = 3600
@@ -66,6 +69,27 @@ min_action_std = 0.1
 action_std_decay_freq = 1 / 50
 action_std_decay_rate = 0.01
 update_epoch = 10
+
+train_parameters = {
+    "num_episodes": number_of_episodes,
+    "critic_lr": critic_lr,
+    "actor_lr": actor_lr,
+    "gamma": gamma,  # Discount factor for future rewards
+    "lambda_": lambda_,
+    "num_epochs": K_epochs,
+    "eps_clip": eps_clip,
+    "min_action_std": min_action_std,
+    "action_std_decay_freq": action_std_decay_freq,
+    "action_std_decay_rate": action_std_decay_rate,
+    "update_epoch": update_epoch,
+    "action_std_init": 0.6,
+    "batch_size": 64,
+    "energy_reward_coeff": ENERGY_REWARD_COEFFICIENT,
+    "temp_reward_coeff": TEMP_REWARD_COEFFICIENT,
+    "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
+    "ev_reward_coeff": EV_REWARD_COEFFICIENT,
+    "debug_mode": True,
+}
 
 home_model_parameters = {
     "min_temp_setting": 17.,  # (°C)
@@ -110,31 +134,13 @@ room_heating_params_list = [{
 logging.info(" --> Local run training")
 start_time = time.perf_counter()
 result = training_function(
-    {
-        "num_episodes": number_of_episodes,
-        "critic_lr": critic_lr,
-        "actor_lr": actor_lr,
-        "gamma": gamma,  # Discount factor for future rewards
-        "lambda_": lambda_,
-        "num_epochs": K_epochs,
-        "eps_clip": eps_clip,
-        "min_action_std": min_action_std,
-        "action_std_decay_freq": action_std_decay_freq,
-        "action_std_decay_rate": action_std_decay_rate,
-        "update_epoch": update_epoch,
-        "action_std_init": 0.6,
-        "batch_size": 64,
-        "energy_reward_coeff": ENERGY_REWARD_COEFFICIENT,
-        "temp_reward_coeff": TEMP_REWARD_COEFFICIENT,
-        "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
-        "ev_reward_coeff": EV_REWARD_COEFFICIENT,
-    },
-    S3_PARAMETERS,
-    BESMART_PARAMETERS,
-    home_model_parameters,
-    storage_parameters,
-    ev_battery_parameters,
-    room_heating_params_list[0],
+    json.dumps(train_parameters),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(room_heating_params_list[0]),
     cycle_timedelta_s,
 )
 end_time = time.perf_counter()
@@ -146,31 +152,13 @@ logging.info(" --> COGNIT run training")
 start_time = time.perf_counter()
 return_code, result = runtime.call(
     training_function,
-    {
-        "num_episodes": number_of_episodes,
-        "critic_lr": critic_lr,
-        "actor_lr": actor_lr,
-        "gamma": gamma,  # Discount factor for future rewards
-        "lambda_": lambda_,
-        "num_epochs": K_epochs,
-        "eps_clip": eps_clip,
-        "min_action_std": min_action_std,
-        "action_std_decay_freq": action_std_decay_freq,
-        "action_std_decay_rate": action_std_decay_rate,
-        "update_epoch": update_epoch,
-        "action_std_init": 0.6,
-        "batch_size": 64,
-        "energy_reward_coeff": ENERGY_REWARD_COEFFICIENT,
-        "temp_reward_coeff": TEMP_REWARD_COEFFICIENT,
-        "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
-        "ev_reward_coeff": EV_REWARD_COEFFICIENT,
-    },
-    S3_PARAMETERS,
-    BESMART_PARAMETERS,
-    home_model_parameters,
-    storage_parameters,
-    ev_battery_parameters,
-    room_heating_params_list[0],
+    json.dumps(train_parameters),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(room_heating_params_list[0]),
     cycle_timedelta_s,
 )
 end_time = time.perf_counter()
@@ -192,12 +180,12 @@ logging.info(" --> Local run predict 1")
 start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
-    s3_parameters=S3_PARAMETERS,
-    besmart_parameters=BESMART_PARAMETERS,
-    home_model_parameters=home_model_parameters,
-    storage_parameters=storage_parameters,
-    ev_battery_parameters=ev_battery_parameters,
-    room_heating_params_list=room_heating_params_list,
+    s3_parameters=json.dumps(S3_PARAMETERS),
+    besmart_parameters=json.dumps(BESMART_PARAMETERS),
+    home_model_parameters=json.dumps(home_model_parameters),
+    storage_parameters=json.dumps(storage_parameters),
+    ev_battery_parameters=json.dumps(ev_battery_parameters),
+    room_heating_params_list=json.dumps(room_heating_params_list),
     cycle_timedelta_s=cycle_timedelta_s,
 )
 end_time = time.perf_counter()
@@ -208,12 +196,12 @@ logging.info(" --> Local run predict 2")
 start_time = time.perf_counter()
 action = make_decision(
     timestamp=timestamp.timestamp(),
-    s3_parameters=S3_PARAMETERS,
-    besmart_parameters=BESMART_PARAMETERS,
-    home_model_parameters=home_model_parameters,
-    storage_parameters=storage_parameters,
-    ev_battery_parameters=ev_battery_parameters,
-    room_heating_params_list=room_heating_params_list,
+    s3_parameters=json.dumps(S3_PARAMETERS),
+    besmart_parameters=json.dumps(BESMART_PARAMETERS),
+    home_model_parameters=json.dumps(home_model_parameters),
+    storage_parameters=json.dumps(storage_parameters),
+    ev_battery_parameters=json.dumps(ev_battery_parameters),
+    room_heating_params_list=json.dumps(room_heating_params_list),
     cycle_timedelta_s=cycle_timedelta_s,
 )
 end_time = time.perf_counter()
@@ -226,12 +214,12 @@ start_time = time.perf_counter()
 return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
-    S3_PARAMETERS,
-    BESMART_PARAMETERS,
-    home_model_parameters,
-    storage_parameters,
-    ev_battery_parameters,
-    room_heating_params_list,
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(room_heating_params_list),
     cycle_timedelta_s,
 )
 end_time = time.perf_counter()
@@ -245,12 +233,12 @@ start_time = time.perf_counter()
 return_code, result = runtime.call(
     make_decision,
     timestamp.timestamp(),
-    S3_PARAMETERS,
-    BESMART_PARAMETERS,
-    home_model_parameters,
-    storage_parameters,
-    ev_battery_parameters,
-    room_heating_params_list,
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(room_heating_params_list),
     cycle_timedelta_s,
 )
 end_time = time.perf_counter()

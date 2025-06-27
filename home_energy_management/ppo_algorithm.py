@@ -1,17 +1,15 @@
-from typing import Any
-
-
 def make_decision(
         timestamp: float,
-        s3_parameters: dict[str, str],
-        besmart_parameters: dict[str, Any],
-        home_model_parameters: dict[str, float],
-        storage_parameters: dict[str, float],
-        ev_battery_parameters: dict[str, float],
-        room_heating_params_list: list[dict],
+        s3_parameters: str,
+        besmart_parameters: str,
+        home_model_parameters: str,
+        storage_parameters: str,
+        ev_battery_parameters: str,
+        room_heating_params_list: str,
         cycle_timedelta_s: int,
-) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+) -> tuple[str, str, str]:
     import datetime
+    import json
     from io import BytesIO
 
     import boto3
@@ -138,6 +136,12 @@ def make_decision(
 
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    s3_parameters = json.loads(s3_parameters)
+    besmart_parameters = json.loads(besmart_parameters)
+    home_model_parameters = json.loads(home_model_parameters)
+    storage_parameters = json.loads(storage_parameters)
+    ev_battery_parameters = json.loads(ev_battery_parameters)
+    room_heating_params_list = json.loads(room_heating_params_list)
 
     state_datetime = datetime.datetime.fromtimestamp(timestamp)
     cycle_timedelta_min = cycle_timedelta_s // 60
@@ -173,8 +177,8 @@ def make_decision(
     s3_client = boto3.client(
         "s3",
         endpoint_url=s3_parameters["endpoint_url"],
-        # aws_access_key_id=s3_parameters["access_key_id"],
-        # aws_secret_access_key=s3_parameters["secret_access_key"],
+        aws_access_key_id=s3_parameters["access_key_id"],
+        aws_secret_access_key=s3_parameters["secret_access_key"],
     )
     stream = BytesIO()
     s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=s3_parameters["model_filename"], Fileobj=stream)
@@ -224,23 +228,24 @@ def make_decision(
         ev_params["StorCtl_Mod"] = 0
 
     return (
-        conf_temp_per_room,
-        storage_params,
-        ev_params,
+        json.dumps(conf_temp_per_room),
+        json.dumps(storage_params),
+        json.dumps(ev_params),
     )
 
 
 def training_function(
-        train_parameters: dict[str, Any],
-        s3_parameters: dict[str, str],
-        besmart_parameters: dict[str, Any],
-        home_model_parameters: dict[str, Any],
-        storage_parameters: dict[str, float],
-        ev_battery_parameters: dict[str, float],
-        heating_parameters: dict[str, Any],
+        train_parameters: str,
+        s3_parameters: str,
+        besmart_parameters: str,
+        home_model_parameters: str,
+        storage_parameters: str,
+        ev_battery_parameters: str,
+        heating_parameters: str,
         cycle_timedelta_s: int,
-) -> list[float]:
+) -> list[float] | str:
     import datetime
+    import json
     import logging
     import math
     from io import BytesIO
@@ -579,16 +584,15 @@ def training_function(
             'Accept': 'application/json',
             'Authorization': f'Bearer {token}'
         }
+        since = int(besmart_parameters["since"]) - cycle_timedelta_s
         if is_cumulative:
-            since_datetime = np.datetime64(besmart_parameters["since"]) - 2 * np.timedelta64(cycle_timedelta_s, 's')
-        else:
-            since_datetime = np.datetime64(besmart_parameters["since"]) - np.timedelta64(cycle_timedelta_s, 's')
+            since -= cycle_timedelta_s
         body = [{
             "client_cid": cid,
             "sensor_mid": mid,
             "signal_type_moid": moid,
-            "since": int(since_datetime.astype(int) / 1000),
-            "till": int(np.datetime64(besmart_parameters["till"]).astype(int) / 1000),
+            "since": since * 1000,
+            "till": int(besmart_parameters["till"]) * 1000,
             "get_last": True,
         }]
         res = requests.post(
@@ -637,10 +641,9 @@ def training_function(
             'Accept': 'application/json',
             'X-Auth': besmart_parameters['workspace_key'],
         }
-        since_datetime = np.datetime64(besmart_parameters["since"]) - np.timedelta64(cycle_timedelta_s, 's')
         params = {
-            "since": int(since_datetime.astype(int) / 1000),
-            "till": int(np.datetime64(besmart_parameters["till"]).astype(int) / 1000),
+            "since": (int(besmart_parameters["since"]) - cycle_timedelta_s) * 1000,
+            "till": int(besmart_parameters["till"]) * 1000,
             'delta_t': cycle_timedelta_s // 60,
             'raw': False,
             'get_last': True,
@@ -666,11 +669,11 @@ def training_function(
     def validate_data(time: np.ndarray,
                       value: np.ndarray,
                       is_cumulative: bool = False) -> np.ndarray:
-        since = np.datetime64(besmart_parameters["since"])
+        since = np.datetime64(int(besmart_parameters["since"]), "s")
         if is_cumulative:
             since -= np.timedelta64(cycle_timedelta_s, 's')
         expected_time = np.arange(since,
-                                  np.datetime64(besmart_parameters["till"]),
+                                  np.datetime64(int(besmart_parameters["till"]), "s"),
                                   np.timedelta64(cycle_timedelta_s, 's')).astype('datetime64[m]')
         missing_time = np.array([t for t in expected_time if t not in time])
         num_missing = len(missing_time)
@@ -701,6 +704,13 @@ def training_function(
 
     epsilon = 1e-8
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_parameters = json.loads(train_parameters)
+    s3_parameters = json.loads(s3_parameters)
+    besmart_parameters = json.loads(besmart_parameters)
+    home_model_parameters = json.loads(home_model_parameters)
+    storage_parameters = json.loads(storage_parameters)
+    ev_battery_parameters = json.loads(ev_battery_parameters)
+    heating_parameters = json.loads(heating_parameters)
 
     number_of_episodes = train_parameters["num_episodes"]
     lr_critic = train_parameters["critic_lr"]
@@ -763,8 +773,8 @@ def training_function(
     ])
     action_std = action_std_init
 
-    timestamps = np.arange(besmart_parameters["since"],
-                           besmart_parameters["till"],
+    timestamps = np.arange(np.datetime64(int(besmart_parameters["since"]), "s"),
+                           np.datetime64(int(besmart_parameters["till"]), "s"),
                            datetime.timedelta(seconds=cycle_timedelta_s))
 
     token = authenticate_to_besmart()
@@ -851,8 +861,13 @@ def training_function(
     s3 = boto3.resource(
         "s3",
         endpoint_url=s3_parameters["endpoint_url"],
+        aws_access_key_id=s3_parameters["access_key_id"],
+        aws_secret_access_key=s3_parameters["secret_access_key"],
     )
     bucket = s3.Bucket(s3_parameters["bucket_name"])
     bucket.put_object(Key=s3_parameters["model_filename"], Body=tmp_stream.getvalue())
 
-    return ep_reward_list
+    if train_parameters.get("debug_mode", False):
+        return ep_reward_list
+    else:
+        return "200 OK"
