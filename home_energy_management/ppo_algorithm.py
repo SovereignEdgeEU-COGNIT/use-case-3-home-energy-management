@@ -4,10 +4,10 @@ def make_decision(
         besmart_parameters: str,
         home_model_parameters: str,
         storage_parameters: str,
-        ev_battery_parameters: str,
-        room_heating_params_list: str,
-        cycle_timedelta_s: int,
-) -> tuple[str, str, str]:
+        ev_battery_parameters_per_id: str,
+        heating_parameters: str,
+        user_preferences: str,
+) -> tuple[float, str, str]:
     import datetime
     import json
     from io import BytesIO
@@ -31,7 +31,8 @@ def make_decision(
         tensor_action[0] = tensor_action[0] * (upper_bounds[0] - lower_bounds[0]) / 2 + (
                 upper_bounds[0] + lower_bounds[0]) / 2
         tensor_action[1] = tensor_action[1] * upper_bounds[1]
-        tensor_action[2] = (tensor_action[2] + 1) * upper_bounds[2] / 2
+        for i in range(len(ev_id_list)):
+            tensor_action[2 + i] = (tensor_action[2 + i] + 1) * upper_bounds[2 + i] / 2
         tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
@@ -140,10 +141,12 @@ def make_decision(
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
-    ev_battery_parameters = json.loads(ev_battery_parameters)
-    room_heating_params_list = json.loads(room_heating_params_list)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    heating_parameters = json.loads(heating_parameters)
+    user_preferences = json.loads(user_preferences)
 
     state_datetime = datetime.datetime.fromtimestamp(timestamp)
+    cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
     cycle_timedelta_min = cycle_timedelta_s // 60
     rounding_minutes = state_datetime.minute % cycle_timedelta_min
     if rounding_minutes > cycle_timedelta_min / 2:
@@ -158,15 +161,15 @@ def make_decision(
     max_temp_setting = home_model_parameters["max_temp_setting"]
     storage_max_charging_power = storage_parameters["nominal_power"]
     storage_soc = storage_parameters["curr_charge_level"]
-    is_ev_available = ev_battery_parameters["is_available"]
-    hours_till_ev_departure = ev_battery_parameters["time_until_charged"] / 3600
-    ev_max_charging_power = ev_battery_parameters["nominal_power"]
-    ev_soc = ev_battery_parameters["curr_charge_level"]
-    temp_inside = np.mean(np.array([room["curr_temp"] for room in room_heating_params_list]))
-    pref_temp = np.mean(np.array([room["preferred_temp"] for room in room_heating_params_list]))
+    ev_id_list = list(ev_battery_parameters_per_id.keys())
+    ev_id_list.sort()
+    temp_inside = heating_parameters["curr_temp"]
+    pref_temp = heating_parameters["preferred_temp"]
     temp_window = home_model_parameters["heating_delta_temperature"]
-    lower_bounds = [min_temp_setting, - storage_max_charging_power, 0.]
-    upper_bounds = [max_temp_setting, storage_max_charging_power, ev_max_charging_power]
+
+    lower_bounds = [min_temp_setting, - storage_max_charging_power] + len(ev_id_list) * [0.]
+    upper_bounds = [max_temp_setting, storage_max_charging_power] + [
+        ev_battery_parameters_per_id[ev_id]["nominal_power"] for ev_id in ev_id_list]
 
     token = authenticate_to_besmart()
     pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])[0]
@@ -187,18 +190,25 @@ def make_decision(
     model = convert(onnx_model)
 
     state = (
-        float(is_ev_available),
         (state_datetime.hour + state_datetime.minute / 60) / 24,
-        hours_till_ev_departure / 24,
         pv_generation_pred / 3,
         energy_consumption_pred / 3,
         (temp_inside - min_temp_setting) / max_temp_setting,
-        (pref_temp - temp_window - min_temp_setting) / max_temp_setting,
-        (pref_temp + temp_window - min_temp_setting) / max_temp_setting,
+        (temp_inside - (pref_temp - temp_window)) / (max_temp_setting - min_temp_setting),
+        (pref_temp + temp_window - temp_inside) / (max_temp_setting - min_temp_setting),
         temp_outside_pred / 30,
         storage_soc / 100,
-        ev_soc / 100,
     )
+    for ev_id in ev_id_list:
+        ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+        is_ev_available = ev_battery_parameters["is_available"]
+        hours_till_ev_departure = ev_battery_parameters["time_until_charged"] / 3600
+        ev_soc = ev_battery_parameters["curr_charge_level"]
+        state += (
+            is_ev_available,
+            hours_till_ev_departure / 24,
+            ev_soc / 100,
+        )
 
     action = select_action(
         model,
@@ -206,11 +216,9 @@ def make_decision(
         lower_bounds,
         upper_bounds,
     )
-    (temp_setting, storage_charging_power, ev_charging_power) = action
-
-    conf_temp_per_room = {}
-    for room in room_heating_params_list:
-        conf_temp_per_room[room["name"]] = temp_setting
+    temp_setting = action[0]
+    storage_charging_power = action[1]
+    ev_charging_power_list = action[2:]
 
     storage_params = {"InWRte": 0.0, "OutWRte": 0.0}
     if storage_charging_power > 0:
@@ -220,17 +228,21 @@ def make_decision(
         storage_params["OutWRte"] = - storage_charging_power / storage_max_charging_power * 100.
         storage_params["StorCtl_Mod"] = 2
 
-    ev_params = {"InWRte": 0.0, "OutWRte": 0.0}
-    if ev_charging_power > 0:
-        ev_params["InWRte"] = ev_charging_power / ev_max_charging_power * 100.
-        ev_params["StorCtl_Mod"] = 1
-    else:
-        ev_params["StorCtl_Mod"] = 0
+    ev_params_per_id = {}
+    for ev_id, ev_charging_power in zip(ev_id_list, ev_charging_power_list):
+        ev_max_charging_power = ev_battery_parameters_per_id[ev_id]["nominal_power"]
+        ev_params = {"InWRte": 0.0, "OutWRte": 0.0}
+        if ev_charging_power > 0:
+            ev_params["InWRte"] = ev_charging_power / ev_max_charging_power * 100.
+            ev_params["StorCtl_Mod"] = 1
+        else:
+            ev_params["StorCtl_Mod"] = 0
+        ev_params_per_id[ev_id] = ev_params
 
     return (
-        json.dumps(conf_temp_per_room),
+        temp_setting,
         json.dumps(storage_params),
-        json.dumps(ev_params),
+        json.dumps(ev_params_per_id),
     )
 
 
@@ -240,9 +252,9 @@ def training_function(
         besmart_parameters: str,
         home_model_parameters: str,
         storage_parameters: str,
-        ev_battery_parameters: str,
+        ev_battery_parameters_per_id: str,
         heating_parameters: str,
-        cycle_timedelta_s: int,
+        user_preferences: str,
 ) -> list[float] | str:
     import datetime
     import json
@@ -259,32 +271,39 @@ def training_function(
     from torch.distributions import MultivariateNormal
     from torch.utils.data import TensorDataset, DataLoader
 
-    def get_state(index: int) -> tuple[float, float, float, float, float, float, float, float, float, float, float]:
-        ev_driving_power = ev_driving_state["driving_power"]
-        hours_till_ev_departure = ev_driving_state["time_till_departure"].seconds / 3600
-
-        return (
-            float(ev_driving_power == 0.),
+    def get_state(index: int) -> tuple[float, ...]:
+        state = (
             (time.hour + time.minute / 60) / 24,
-            hours_till_ev_departure / 24,
             pv_generation_pred_list[index] / 3,
             energy_consumption_pred_list[index] / 3,
             (temp_inside - min_temp_setting) / max_temp_setting,
-            (pref_temperature - temp_window - min_temp_setting) / max_temp_setting,
-            (pref_temperature + temp_window - min_temp_setting) / max_temp_setting,
+            (temp_inside - (pref_temperature - temp_window)) / (max_temp_setting - min_temp_setting),
+            (pref_temperature + temp_window - temp_inside) / (max_temp_setting - min_temp_setting),
             temp_outside_list[index] / 30,
             storage_soc / 100,
-            ev_soc / 100,
         )
 
-    def get_ev_driving_state() -> dict[str, Any]:
-        ev_schedule_ind = np.where(time >= ev_driving_time_arr)[0][-1]
+        for ev_id in ev_id_list:
+            ev_driving_state = ev_driving_state_per_id[ev_id]
+            ev_driving_power = ev_driving_state["driving_power"]
+            hours_till_ev_departure = ev_driving_state["time_till_departure"].seconds / 3600
+            state += (
+                float(ev_driving_power == 0.),
+                hours_till_ev_departure / 24,
+                ev_soc_per_id[ev_id] / 100,
+            )
+
+        return state
+
+    def get_ev_driving_state(ev_driving_schedule: dict[str, Any]) -> dict[str, Any]:
+        ev_driving_time = ev_driving_schedule["time"]
+        ev_schedule_ind = np.where(time >= ev_driving_time)[0][-1]
         ev_driving_power = ev_driving_schedule["driving_power"][ev_schedule_ind]
 
         next_driving_power_arr = np.array(ev_driving_schedule["driving_power"][ev_schedule_ind + 1:]
                                           + ev_driving_schedule["driving_power"][:ev_schedule_ind + 1])
-        next_driving_time_arr = np.concatenate((ev_driving_time_arr[ev_schedule_ind + 1:],
-                                                ev_driving_time_arr[:ev_schedule_ind + 1]))
+        next_driving_time_arr = np.concatenate((ev_driving_time[ev_schedule_ind + 1:],
+                                                ev_driving_time[:ev_schedule_ind + 1]))
         next_ev_departure_time = next_driving_time_arr[np.where(next_driving_power_arr > 0.)[0][0]]
         next_ev_departure_timestamp = datetime.datetime.strptime(
             f"{next_ev_departure_time.hour}:{next_ev_departure_time.minute}", "%H:%M")
@@ -306,7 +325,7 @@ def training_function(
     def get_reward(controlled_consumption_t: float,
                    temp_inside_t: float,
                    storage_soc_t: float,
-                   ev_soc_t: float,
+                   ev_soc_per_id_t: dict[int, float],
                    dt: int) -> float:
         energy_balance = pv_generation - energy_consumption - controlled_consumption_t
         temperature_error = max(np.abs(temp_inside_t - pref_temperature) - temp_window, 0.)
@@ -314,17 +333,23 @@ def training_function(
                              + max(storage_min_charge_level - storage_soc_t, 0.)
                              ) / 100. * storage_max_capacity
 
-        ev_driving_power = ev_driving_state["driving_power"]
-        time_till_ev_departure = ev_driving_state["time_till_departure"].seconds
-        if ev_driving_power == 0.:
-            ev_soc_error = (max(ev_soc_t - 100., 0.)
-                            + max(ev_min_charge_level - ev_soc_t, 0.)
-                            ) / 100. * ev_max_capacity
-            if time_till_ev_departure <= dt:
-                ev_soc_departure_error = max(ev_driving_charge_level - ev_soc_t, 0.) / 100. * ev_max_capacity
-                ev_soc_error += ev_soc_departure_error
-        else:
-            ev_soc_error = 0
+        ev_soc_error = 0
+        for ev_id in ev_id_list:
+            ev_driving_state = ev_driving_state_per_id[ev_id]
+            ev_driving_power = ev_driving_state["driving_power"]
+            time_till_ev_departure = ev_driving_state["time_till_departure"].seconds
+            ev_soc_t = ev_soc_per_id_t[ev_id]
+            if ev_driving_power == 0.:
+                ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+                ev_min_charge_level = ev_battery_parameters["min_charge_level"]
+                ev_max_capacity = ev_battery_parameters["max_capacity"]
+                ev_soc_error += (max(ev_soc_t - 100., 0.)
+                                 + max(ev_min_charge_level - ev_soc_t, 0.)
+                                 ) / 100. * ev_max_capacity
+                if time_till_ev_departure <= dt:
+                    ev_driving_charge_level = ev_battery_parameters["driving_charge_level"]
+                    ev_soc_error += max(ev_driving_charge_level - ev_soc_t, 0.) / 100. * ev_max_capacity
+
 
         energy_balance_reward = - energy_reward_coeff * np.abs(energy_balance)
         temperature_reward = - temp_reward_coeff * temperature_error
@@ -332,12 +357,14 @@ def training_function(
         ev_reward = - ev_reward_coeff * ev_soc_error
         return energy_balance_reward + temperature_reward + storage_reward + ev_reward
 
-    def step(actions: tuple[float, float, float],
+    def step(actions: tuple[float, ...],
              temp_inside_t: float,
              storage_soc_t: float,
-             ev_soc_t: float,
-             dt: int) -> tuple[float, float, float, float, bool]:
-        temp_setting, storage_charging_power, ev_charging_power = actions
+             ev_soc_per_id_t: dict[int, float],
+             dt: int) -> tuple[float, float, float, dict, bool]:
+        temp_setting = actions[0]
+        storage_charging_power = actions[1]
+        ev_charging_power_list = actions[2:]
 
         delta_temp = temp_inside_t - temp_setting
         if abs(delta_temp) > temp_window:
@@ -362,26 +389,35 @@ def training_function(
         storage_consumption = real_delta_capacity / (
                 storage_power_reduction * storage_efficiency if storage_charging_power > 0 else 1.)
 
-        ev_driving_power = ev_driving_state["driving_power"]
-        if ev_driving_power == 0.:
-            ev_power_reduction = min(1.0, max(epsilon, (100. - ev_soc_t) / (100. - ev_charging_switch_level)))
-            delta_capacity = ev_charging_power * dt / 3600 * ev_efficiency * ev_power_reduction
-            next_ev_soc = ev_soc_t + delta_capacity / ev_max_capacity * 100.0
-            next_ev_soc = (1.0 - ev_energy_loss * dt / 100.0) * next_ev_soc
-            next_ev_soc = min(max(next_ev_soc, epsilon), 100.0)
-            real_delta_capacity = (next_ev_soc - ev_soc_t) / 100. * ev_max_capacity
-            ev_consumption = real_delta_capacity / (ev_power_reduction * ev_efficiency)
-        else:
-            next_ev_soc = ev_soc_t - ev_driving_power * dt / 3600 / ev_max_capacity * 100.0
-            next_ev_soc = max(next_ev_soc, epsilon)
-            ev_consumption = 0.
+        next_ev_soc_per_id = {}
+        for ev_id, ev_charging_power in zip(ev_id_list, ev_charging_power_list):
+            ev_driving_power = ev_driving_state_per_id[ev_id]["driving_power"]
+            ev_soc_t = ev_soc_per_id_t[ev_id]
+            ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+            ev_charging_switch_level = ev_battery_parameters["charging_switch_level"]
+            ev_efficiency = ev_battery_parameters["efficiency"]
+            ev_max_capacity = ev_battery_parameters["max_capacity"]
+            ev_energy_loss = ev_battery_parameters["energy_loss"]
+            if ev_driving_power == 0.:
+                ev_power_reduction = min(1.0, max(epsilon, (100. - ev_soc_t) / (100. - ev_charging_switch_level)))
+                delta_capacity = ev_charging_power * dt / 3600 * ev_efficiency * ev_power_reduction
+                next_ev_soc = ev_soc_t + delta_capacity / ev_max_capacity * 100.0
+                next_ev_soc = (1.0 - ev_energy_loss * dt / 100.0) * next_ev_soc
+                next_ev_soc = min(max(next_ev_soc, epsilon), 100.0)
+                real_delta_capacity = (next_ev_soc - ev_soc_t) / 100. * ev_max_capacity
+                ev_consumption = real_delta_capacity / (ev_power_reduction * ev_efficiency)
+            else:
+                next_ev_soc = ev_soc_t - ev_driving_power * dt / 3600 / ev_max_capacity * 100.0
+                next_ev_soc = max(next_ev_soc, epsilon)
+                ev_consumption = 0.
+            next_ev_soc_per_id[ev_id] = next_ev_soc
 
         controlled_consumption = heating_consumption + storage_consumption + ev_consumption
         reward_t = get_reward(
             controlled_consumption,
             next_temp_inside,
             next_storage_soc,
-            next_ev_soc,
+            next_ev_soc_per_id,
             dt
         )
 
@@ -389,7 +425,7 @@ def training_function(
             reward_t,
             next_temp_inside,
             next_storage_soc,
-            next_ev_soc,
+            next_ev_soc_per_id,
             next_is_heating_on,
         )
 
@@ -482,7 +518,8 @@ def training_function(
         tensor_action[0] = tensor_action[0] * (upper_bounds[0] - lower_bounds[0]) / 2 + (
                     upper_bounds[0] + lower_bounds[0]) / 2
         tensor_action[1] = tensor_action[1] * upper_bounds[1]
-        tensor_action[2] = (tensor_action[2] + 1) * upper_bounds[2] / 2
+        for i in range(len(ev_id_list)):
+            tensor_action[2 + i] = (tensor_action[2 + i] + 1) * upper_bounds[2 + i] / 2
         tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
@@ -709,8 +746,9 @@ def training_function(
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
-    ev_battery_parameters = json.loads(ev_battery_parameters)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
     heating_parameters = json.loads(heating_parameters)
+    user_preferences = json.loads(user_preferences)
 
     number_of_episodes = train_parameters["num_episodes"]
     lr_critic = train_parameters["critic_lr"]
@@ -736,9 +774,6 @@ def training_function(
     temp_window = home_model_parameters["heating_delta_temperature"]
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
-    ev_driving_schedule = home_model_parameters["ev_driving_schedule"]
-    pref_temp_schedule = home_model_parameters["pref_temp_schedule"]
-    pref_temp_schedule_time = np.array([datetime.datetime.strptime(t, "%H:%M").time() for t in pref_temp_schedule["time"]])
 
     heating_devices_power = sum(heating_parameters["powers_of_heating_devices"])
 
@@ -749,18 +784,22 @@ def training_function(
     storage_energy_loss = storage_parameters["energy_loss"]
     storage_nominal_power = storage_parameters["nominal_power"]
 
-    ev_max_capacity = ev_battery_parameters["max_capacity"]
-    ev_min_charge_level = ev_battery_parameters["min_charge_level"]
-    ev_driving_charge_level = ev_battery_parameters["driving_charge_level"]
-    ev_charging_switch_level = ev_battery_parameters["charging_switch_level"]
-    ev_efficiency = ev_battery_parameters["efficiency"]
-    ev_energy_loss = ev_battery_parameters["energy_loss"]
-    ev_nominal_power = ev_battery_parameters["nominal_power"]
-    ev_driving_time_arr = np.array([datetime.datetime.strptime(t, "%H:%M").time() for t in ev_driving_schedule["time"]])
+    ev_driving_schedule_per_id = user_preferences["ev_driving_schedule"]
+    pref_temp_schedule = user_preferences["pref_temp_schedule"]
+    pref_temp_schedule_time = np.array([datetime.datetime.strptime(t, "%H:%M").time()
+                                        for t in user_preferences["time"]])
+    cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
 
-    lower_bounds = [min_temp_setting, - storage_nominal_power, 0.]
-    upper_bounds = [max_temp_setting, storage_nominal_power, ev_nominal_power]
-    state_dim = 11
+    ev_id_list = list(ev_battery_parameters_per_id.keys())
+    ev_id_list.sort()
+    for ev_driving_schedule_dict in ev_driving_schedule_per_id.values():
+        ev_driving_schedule_dict["time"] = np.array([datetime.datetime.strptime(t, "%H:%M").time()
+                                                     for t in ev_driving_schedule_dict["time"]])
+
+    lower_bounds = [min_temp_setting, - storage_nominal_power] + len(ev_id_list) * [0.]
+    upper_bounds = [max_temp_setting, storage_nominal_power] + [
+        ev_battery_parameters_per_id[ev_id]["nominal_power"] for ev_id in ev_id_list]
+    state_dim = 8 + 3 * len(ev_id_list)
     action_dim = len(lower_bounds)
 
     policy = ActorCritic()
@@ -804,14 +843,19 @@ def training_function(
         pref_temperature = get_preferred_temperature()
         temp_inside = pref_temperature + np.random.uniform(- temp_window, temp_window)
         storage_soc = np.random.uniform(storage_min_charge_level, 100.)
-        ev_soc = np.random.uniform(ev_min_charge_level, 100.)
+        ev_soc_per_id = {
+            ev_id: np.random.uniform(ev_battery_parameters["min_charge_level"], 100.)
+            for ev_id, ev_battery_parameters in ev_battery_parameters_per_id.items()
+        }
         is_heating_on = bool(np.random.randint(2))
 
         episodic_reward = 0
         for i_cycle in range(number_of_cycles):
             ts = (timestamps_list[i_cycle] - np.datetime64('1970-01-01T00:00:00')) / np.timedelta64(1, 's')
             time = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).time()
-            ev_driving_state = get_ev_driving_state()
+            ev_driving_state_per_id = {
+                ev_id: get_ev_driving_state(ev_driving_schedule_per_id[ev_id]) for ev_id in ev_id_list
+            }
             pref_temperature = get_preferred_temperature()
             state = get_state(index=i_cycle)
             action = select_action(torch.tensor(state, dtype=torch.float).unsqueeze(0))
@@ -821,8 +865,8 @@ def training_function(
             temp_outside = temp_outside_list[i_cycle]
 
             # Receive state and reward from environment.
-            reward, temp_inside, storage_soc, ev_soc, is_heating_on = step(
-                action, temp_inside, storage_soc, ev_soc, cycle_timedelta_s
+            reward, temp_inside, storage_soc, ev_soc_per_id, is_heating_on = step(
+                action, temp_inside, storage_soc, ev_soc_per_id, cycle_timedelta_s
             )
             buffer.rewards.append(reward)
             if i_cycle == number_of_cycles - 1:

@@ -4,10 +4,10 @@ def make_decision(
         besmart_parameters: str,
         home_model_parameters: str,
         storage_parameters: str,
-        ev_battery_parameters: str,
-        room_heating_params_list: str,
-        cycle_timedelta_s: int,
-) -> tuple[str, str, str]:
+        ev_battery_parameters_per_id: str,
+        heating_parameters: str,
+        user_preferences: str,
+) -> tuple[float, str, str]:
     """
     The algorithm retrieves information about all controller settings and current values. Based on them, it determines
     parameters for the next cycle.
@@ -24,22 +24,23 @@ def make_decision(
             delta_charging_power_perc.
         storage_parameters (str): JSON with parameters defining the energy storage model; dict with values for keys:
             max_capacity, min_charge_level, efficiency, nominal_power, curr_charge_level.
-        ev_battery_parameters (str): JSON with parameters defining the EV battery model; dict with values for keys:
-            max_capacity, driving_charge_level, efficiency, nominal_power, is_available, time_until_charged,
-            curr_charge_level.
-        room_heating_params_list (str): JSON with parameters defining the heating model for individual rooms; list with
-            dicts, each containing values for keys: name, curr_temp, preferred_temp, powers_of_heating_devices,
-            is_device_switch_on.
-        cycle_timedelta_s (int): Time duration of one cycle in seconds.
+        ev_battery_parameters_per_id (str): JSON with parameters defining per EV battery model; dict of dicts with
+            values for keys: max_capacity, driving_charge_level, efficiency, nominal_power, is_available,
+            time_until_charged, curr_charge_level.
+        heating_parameters (str): JSON with parameters defining the heating model for home; dict with values for keys:
+            name, curr_temp, preferred_temp, powers_of_heating_devices, is_device_switch_on.
+        user_preferences (str): JSON with user preferences, i.a. cycle_timedelta_s - time duration of one cycle in
+            seconds.
 
     Returns:
         Configurations for next cycle in JSONs:
-        - configuration of temperature per room in °C,
+        - configuration of temperature in °C,
         - configuration of energy storage (charging and discharging power limits [percent of nominal power], mode),
-        - configuration of EV battery (charging and discharging power limits [percent of nominal power], mode).
+        - configuration of EV battery per EV (charging and discharging power limits [percent of nominal power], mode).
     """
     import datetime
     import json
+    from typing import Any
 
     import numpy as np
     import requests
@@ -87,7 +88,7 @@ def make_decision(
     def get_energy_data(identifier: dict[str, int]) -> np.ndarray:
         data = get_data_from_besmart(identifier["cid"],
                                      identifier["mid"],
-                                     identifier["moid"],)
+                                     identifier["moid"], )
         time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
         value = np.array(data['value'])
         origin = np.array(data['origin'])
@@ -143,43 +144,33 @@ def make_decision(
         return estm_value - 272.15
 
     def check_heating_conditions(
-            heating_params_list: list[dict],
+            heating_params: dict,
             reduction_of_allowed_temp: float = 0.0,
             available_energy: float | None = None,
-    ) -> tuple[float, dict[str, float], list[dict]]:
+    ) -> tuple[float, dict[str, float]]:
         energy_for_heating = 0.0  # kWh
-        conf_temp_per_room = {}
-        remaining_rooms_list = []
-        for room_heating_params in heating_params_list:
-            room_name = room_heating_params["name"]
-            room_temp = room_heating_params["curr_temp"]
-            room_temp_without_heating = (room_temp - (room_temp - temp_outside_pred)
-                                         * heat_loss_coeff * cycle_timedelta_s / heat_capacity)
-            temp_diff = room_heating_params["preferred_temp"] - reduction_of_allowed_temp - room_temp_without_heating
-            if temp_diff > 0:
-                energy_for_room_heating = (sum(room_heating_params["powers_of_heating_devices"])
-                                           * cycle_timedelta_s / 3600)  # kWh
-                if available_energy:
-                    if energy_for_room_heating > available_energy:
-                        remaining_rooms_list.append(room_heating_params)
-                        continue
-                    else:
-                        available_energy -= energy_for_room_heating
-                conf_temp_per_room[room_name] = room_temp + 2 * temp_diff
-                energy_for_heating += energy_for_room_heating
-            else:
-                remaining_rooms_list.append(room_heating_params)
+        current_temp = heating_params["curr_temp"]
+        conf_temp = current_temp
+        temp_without_heating = (current_temp - (current_temp - temp_outside_pred)
+                                * heat_loss_coeff * cycle_timedelta_s / heat_capacity)
+        temp_diff = heating_params["preferred_temp"] - reduction_of_allowed_temp - temp_without_heating
+        if temp_diff > 0:
+            energy_for_heating = (sum(heating_params["powers_of_heating_devices"])
+                                       * cycle_timedelta_s / 3600)  # kWh
+            if available_energy and energy_for_heating < available_energy:
+                available_energy -= energy_for_heating
+            conf_temp += 2 * temp_diff
 
-        return energy_for_heating, conf_temp_per_room, remaining_rooms_list
+        return energy_for_heating, conf_temp
 
-    def does_ev_battery_require_charging(
-            charge_level_of_ev_battery: float,
-            ev_battery_charged_level: float,
-            ev_battery_max_capacity: float,
-            ev_battery_efficiency: float,
-            ev_battery_nominal_power: float,
-            time_until_ev_charged: int,
-    ) -> bool:
+    def does_ev_battery_require_charging(ev_battery_params: dict[str, Any]) -> bool:
+        charge_level_of_ev_battery = ev_battery_params["curr_charge_level"]
+        ev_battery_max_capacity = ev_battery_params["max_capacity"]
+        ev_battery_charged_level = ev_battery_params["driving_charge_level"]
+        ev_battery_efficiency = ev_battery_params["efficiency"]
+        ev_battery_nominal_power = ev_battery_params["nominal_power"]
+        time_until_ev_charged = ev_battery_params["time_until_charged"]
+
         ev_charging_capacity = ((ev_battery_charged_level - charge_level_of_ev_battery)
                                 / 100 * ev_battery_max_capacity / ev_battery_efficiency)
         if ev_charging_capacity < 0:
@@ -206,10 +197,12 @@ def make_decision(
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
-    ev_battery_parameters = json.loads(ev_battery_parameters)
-    room_heating_params_list = json.loads(room_heating_params_list)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    heating_parameters = json.loads(heating_parameters)
+    user_preferences = json.loads(user_preferences)
 
     state_datetime = datetime.datetime.fromtimestamp(timestamp)
+    cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
     cycle_timedelta_min = cycle_timedelta_s // 60
     rounding_minutes = state_datetime.minute % cycle_timedelta_min
     if rounding_minutes > cycle_timedelta_min / 2:
@@ -237,120 +230,132 @@ def make_decision(
     storage_efficiency = storage_parameters["efficiency"]
     storage_nominal_power = storage_parameters["nominal_power"]
 
-    charge_level_of_ev_battery = ev_battery_parameters["curr_charge_level"]
-    ev_battery_max_capacity = ev_battery_parameters["max_capacity"]
-    ev_battery_charged_level = ev_battery_parameters["driving_charge_level"]
-    ev_battery_efficiency = ev_battery_parameters["efficiency"]
-    ev_battery_nominal_power = ev_battery_parameters["nominal_power"]
-    is_ev_available = ev_battery_parameters["is_available"]
-    time_until_ev_charged = ev_battery_parameters["time_until_charged"]
-
     energy_in_storage = (charge_level_of_storage - storage_min_charge_level) / 100 * storage_max_capacity
     initial_energy_in_storage = energy_in_storage
+    temp_configuration = heating_parameters["preferred_temp"]
 
-    (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
+    (energy_pv_production, energy_in_storage, energy_from_power_grid) = distribute_needed_energy(
         energy_needed=energy_consumption_pred,
         energy_pv_produced=pv_generation_pred,
         energy_in_storage=energy_in_storage,
     )
 
     # Home heating - necessary
-    (energy_for_necessary_heating, conf_per_room, remaining_rooms_list) = check_heating_conditions(
-        heating_params_list=room_heating_params_list,
+    (energy_for_necessary_heating, conf_temp) = check_heating_conditions(
+        heating_params=heating_parameters,
         reduction_of_allowed_temp=delta_temp,
     )
-    temp_per_room_configuration = conf_per_room
-    (energy_pv_production, energy_in_storage, energy_from_power_grid) = distribute_needed_energy(
-        energy_needed=energy_for_necessary_heating,
-        energy_pv_produced=energy_pv_production,
-        energy_in_storage=energy_in_storage,
-    )
-    energy_from_power_grid += missing_energy
-
-    # EV charging - required
-    energy_for_ev_charging = 0.0
-    if is_ev_available and does_ev_battery_require_charging(
-            charge_level_of_ev_battery=charge_level_of_ev_battery,
-            ev_battery_charged_level=ev_battery_charged_level,
-            ev_battery_max_capacity=ev_battery_max_capacity,
-            ev_battery_efficiency=ev_battery_efficiency,
-            ev_battery_nominal_power=ev_battery_nominal_power,
-            time_until_ev_charged=time_until_ev_charged,
-    ):
-        energy_for_ev_charging = min(
-            ev_battery_nominal_power * cycle_timedelta_s / 3600,  # kWh
-            (1 - charge_level_of_ev_battery / 100) * ev_battery_max_capacity / ev_battery_efficiency
-        )
+    if energy_for_necessary_heating > 0:
+        temp_configuration = conf_temp
         (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
-            energy_needed=energy_for_ev_charging,
+            energy_needed=energy_for_necessary_heating,
             energy_pv_produced=energy_pv_production,
             energy_in_storage=energy_in_storage,
         )
         energy_from_power_grid += missing_energy
 
+    # EV charging - required
+    energy_for_ev_charging_per_id = {ev_id: 0.0 for ev_id in ev_battery_parameters_per_id}
+    for ev_id, ev_battery_parameters in ev_battery_parameters_per_id.items():
+        is_ev_available = ev_battery_parameters["is_available"]
+        if is_ev_available and does_ev_battery_require_charging(
+            ev_battery_params=ev_battery_parameters,
+        ):
+            charge_level_of_ev_battery = ev_battery_parameters["curr_charge_level"]
+            ev_battery_max_capacity = ev_battery_parameters["max_capacity"]
+            ev_battery_efficiency = ev_battery_parameters["efficiency"]
+            ev_battery_nominal_power = ev_battery_parameters["nominal_power"]
+            energy_for_ev_charging = min(
+                ev_battery_nominal_power * cycle_timedelta_s / 3600,  # kWh
+                (1 - charge_level_of_ev_battery / 100) * ev_battery_max_capacity / ev_battery_efficiency
+            )
+            (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
+                energy_needed=energy_for_ev_charging,
+                energy_pv_produced=energy_pv_production,
+                energy_in_storage=energy_in_storage,
+            )
+            energy_from_power_grid += missing_energy
+            energy_for_ev_charging_per_id[ev_id] = energy_for_ev_charging
+
     # Home heating - optional
     available_oze_energy = energy_pv_production + energy_in_storage
-    if available_oze_energy > 0.0 and len(remaining_rooms_list) > 0:
-        (energy_for_optional_heating, conf_per_room, remaining_rooms_list) = (
-            check_heating_conditions(
-                heating_params_list=remaining_rooms_list,
+    energy_for_optional_heating = 0.
+    if available_oze_energy > 0.0 and energy_for_necessary_heating == 0:
+        (energy_for_optional_heating, conf_temp) = check_heating_conditions(
+                heating_params=heating_parameters,
                 available_energy=available_oze_energy,
+        )
+        if energy_for_optional_heating > 0:
+            temp_configuration = conf_temp
+            (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
+                energy_needed=energy_for_optional_heating,
+                energy_pv_produced=energy_pv_production,
+                energy_in_storage=energy_in_storage,
             )
-        )
-        temp_per_room_configuration.update(conf_per_room)
-        (energy_pv_production, energy_in_storage, energy_from_power_grid) = distribute_needed_energy(
-            energy_needed=energy_for_optional_heating,
-            energy_pv_produced=energy_pv_production,
-            energy_in_storage=energy_in_storage,
-        )
+            energy_from_power_grid += missing_energy
 
     # Home heating - additional
     available_oze_energy = energy_pv_production + max(
         energy_in_storage - home_model_parameters["storage_high_charge_level"] / 100 * storage_max_capacity,
         0.0
     )
-    if available_oze_energy > 0.0 and len(remaining_rooms_list) > 0:
-        (energy_for_additional_heating, conf_per_room, remaining_rooms_list) = (
-            check_heating_conditions(
-                heating_params_list=remaining_rooms_list,
+    if available_oze_energy > 0.0 and energy_for_optional_heating == 0:
+        (energy_for_additional_heating, conf_temp) = check_heating_conditions(
+                heating_params=heating_parameters,
                 reduction_of_allowed_temp=-delta_temp,
                 available_energy=available_oze_energy,
+        )
+        if energy_for_additional_heating > 0:
+            temp_configuration = conf_temp
+            (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
+                energy_needed=energy_for_additional_heating,
+                energy_pv_produced=energy_pv_production,
+                energy_in_storage=energy_in_storage,
             )
-        )
-        temp_per_room_configuration.update(conf_per_room)
-        (energy_pv_production, energy_in_storage, energy_from_power_grid) = distribute_needed_energy(
-            energy_needed=energy_for_additional_heating,
-            energy_pv_produced=energy_pv_production,
-            energy_in_storage=energy_in_storage,
-        )
+            energy_from_power_grid += missing_energy
 
-    for room in remaining_rooms_list:
-        temp_per_room_configuration[room["name"]] = room["preferred_temp"]
-
-    # Electric vehicle
+    # EV charging - optional
     available_oze_energy = energy_pv_production + energy_in_storage
-    if is_ev_available and energy_for_ev_charging == 0.0 and available_oze_energy > 0.0:
-        energy_for_ev_charging = min(
-            available_oze_energy,
-            ev_battery_nominal_power * cycle_timedelta_s / 3600,  # kWh
-            (1 - charge_level_of_ev_battery / 100) * ev_battery_max_capacity / ev_battery_efficiency  # kWh
-        )
-        (energy_pv_production, energy_in_storage, energy_from_power_grid) = distribute_needed_energy(
-            energy_needed=energy_for_ev_charging,
-            energy_pv_produced=energy_pv_production,
-            energy_in_storage=energy_in_storage,
-        )
+    for ev_id, ev_battery_parameters in ev_battery_parameters_per_id.items():
+        if (
+                ev_battery_parameters["is_available"]
+                and energy_for_ev_charging_per_id[ev_id] == 0.0
+                and available_oze_energy > 0.0
+        ):
+            charge_level_of_ev_battery = ev_battery_parameters["curr_charge_level"]
+            ev_battery_max_capacity = ev_battery_parameters["max_capacity"]
+            ev_battery_efficiency = ev_battery_parameters["efficiency"]
+            ev_battery_nominal_power = ev_battery_parameters["nominal_power"]
+            energy_for_ev_charging = min(
+                available_oze_energy,
+                ev_battery_nominal_power * cycle_timedelta_s / 3600,  # kWh
+                (1 - charge_level_of_ev_battery / 100) * ev_battery_max_capacity / ev_battery_efficiency  # kWh
+            )
+            available_oze_energy += - energy_for_ev_charging
+            (energy_pv_production, energy_in_storage, missing_energy) = distribute_needed_energy(
+                energy_needed=energy_for_ev_charging,
+                energy_pv_produced=energy_pv_production,
+                energy_in_storage=energy_in_storage,
+            )
+            energy_from_power_grid += missing_energy
+            energy_for_ev_charging_per_id[ev_id] = energy_for_ev_charging
 
-    ev_battery_configuration = {"InWRte": 0.0, "OutWRte": 0.0}
-    if energy_for_ev_charging > 0.0:
-        ev_battery_configuration["StorCtl_Mod"] = 1
-        ev_battery_configuration["InWRte"] = min(
-            round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0
-                  + delta_charging_power_perc, 2),
-            100.0,
-        )
-    else:
-        ev_battery_configuration["StorCtl_Mod"] = 0
+
+    ev_battery_configuration_per_id = {}
+    for ev_id in ev_battery_parameters_per_id:
+        ev_battery_configuration = {"InWRte": 0.0, "OutWRte": 0.0}
+        energy_for_ev_charging = energy_for_ev_charging_per_id[ev_id]
+        if energy_for_ev_charging > 0.0:
+            ev_battery_nominal_power = ev_battery_parameters_per_id[ev_id]["nominal_power"]
+            ev_battery_configuration["StorCtl_Mod"] = 1
+            ev_battery_configuration["InWRte"] = min(
+                round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0
+                      + delta_charging_power_perc, 2),
+                100.0,
+            )
+        else:
+            ev_battery_configuration["StorCtl_Mod"] = 0
+        ev_battery_configuration_per_id[ev_id] = ev_battery_configuration
 
     # Energy storage
     energy_in_storage += storage_efficiency * energy_pv_production
@@ -374,7 +379,7 @@ def make_decision(
         )
 
     return (
-        json.dumps(temp_per_room_configuration),
+        temp_configuration,
         json.dumps(energy_storage_configuration),
-        json.dumps(ev_battery_configuration),
+        json.dumps(ev_battery_configuration_per_id),
     )
