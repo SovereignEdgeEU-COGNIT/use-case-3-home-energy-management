@@ -787,7 +787,7 @@ def training_function(
     ev_driving_schedule_per_id = user_preferences["ev_driving_schedule"]
     pref_temp_schedule = user_preferences["pref_temp_schedule"]
     pref_temp_schedule_time = np.array([datetime.datetime.strptime(t, "%H:%M").time()
-                                        for t in user_preferences["time"]])
+                                        for t in pref_temp_schedule["time"]])
     cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
 
     ev_id_list = list(ev_battery_parameters_per_id.keys())

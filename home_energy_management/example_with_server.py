@@ -10,8 +10,11 @@ from baseline_algorithm import make_decision
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2",
-    "MIN_ENERGY_RENEWABLE_USAGE": 50,
+    "FLAVOUR": "Energy",
+    "GEOLOCATION": {
+        "latitude": 43.05,
+        "longitude": -2.53,
+    },
 }
 
 timestamp = datetime.datetime.fromisoformat('2023-06-16 05:00:00')
@@ -104,25 +107,24 @@ result = make_decision(
 logging.info("Func result: " + str(result))
 
 
-# runtime = device_runtime.DeviceRuntime("cognit.yml")
-# runtime.init(REQS_INIT)
-#
-# logging.info("COGNIT Serverless Runtime ready!")
-#
-# start_time = time.perf_counter()
-# return_code, result = runtime.call(
-#     make_decision,
-#     timestamp.timestamp(),
-#     None,
-#     json.dumps(besmart_parameters),
-#     json.dumps(model_parameters),
-#     json.dumps(storage_parameters),
-#     json.dumps(ev_battery_parameters),
-#     json.dumps(heating_parameters),
-#     json.dumps(user_preferences),
-# )
-# end_time = time.perf_counter()
-#
-# logging.info("Status code: " + str(return_code))
-# logging.info("Func result: " + str(result))
-# logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+runtime = device_runtime.DeviceRuntime("cognit.yml")
+runtime.init(REQS_INIT)
+
+logging.info("COGNIT Serverless Runtime ready!")
+
+start_time = time.perf_counter()
+result = runtime.call(
+    make_decision,
+    timestamp.timestamp(),
+    None,
+    json.dumps(besmart_parameters),
+    json.dumps(model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(heating_parameters),
+    json.dumps(user_preferences),
+)
+end_time = time.perf_counter()
+
+logging.info("Func result: " + str(result))
+logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")

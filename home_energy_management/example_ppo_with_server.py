@@ -12,8 +12,11 @@ logging.basicConfig(level=logging.INFO)
 timestamp = datetime.datetime.fromisoformat('2023-06-16 05:00:00')
 
 REQS_INIT = {
-    "FLAVOUR": "EnergyV2__16GB_1CPU",
-    "MIN_ENERGY_RENEWABLE_USAGE": 50,
+    "FLAVOUR": "EnergyTorch",
+    "GEOLOCATION": {
+        "latitude": 43.05,
+        "longitude": -2.53,
+    },
 }
 
 S3_PARAMETERS = {
@@ -90,10 +93,6 @@ train_parameters = {
     "debug_mode": True,
 }
 
-BESMART_PARAMETERS["till"] = (timestamp - datetime.timedelta(seconds=cycle_timedelta_s)).timestamp()
-BESMART_PARAMETERS["since"] = (BESMART_PARAMETERS["till"]
-                               - datetime.timedelta(days=train_parameters["history_timedelta_days"]).total_seconds())
-
 home_model_parameters = {
     "min_temp_setting": 17.,  # (°C)
     "max_temp_setting": 24.,  # (°C)
@@ -151,7 +150,9 @@ heating_parameters = {
     "preferred_temp": 21.0,  # (°C)
     "powers_of_heating_devices": [8.0, 8.0],  # (kW)
 }
-
+BESMART_PARAMETERS["till"] = (timestamp - datetime.timedelta(seconds=user_preferences["cycle_timedelta_s"])).timestamp()
+BESMART_PARAMETERS["since"] = (BESMART_PARAMETERS["till"]
+                               - datetime.timedelta(days=train_parameters["history_timedelta_days"]).total_seconds())
 
 logging.info(" --> Local run training")
 start_time = time.perf_counter()
@@ -170,24 +171,23 @@ logging.info(f"Func result: {result = }")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
 
-# logging.info(" --> COGNIT run training")
-# start_time = time.perf_counter()
-# return_code, result = runtime.call(
-#     training_function,
-#     json.dumps(train_parameters),
-#     json.dumps(S3_PARAMETERS),
-#     json.dumps(BESMART_PARAMETERS),
-#     json.dumps(home_model_parameters),
-#     json.dumps(storage_parameters),
-#     json.dumps(ev_battery_parameters),
-#     json.dumps(heating_parameters),
-#     json.dumps(user_preferences),
-# )
-# end_time = time.perf_counter()
-#
-# logging.info(f"Status code: {return_code}")
-# logging.info(f"Func result: {result}")
-# logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
+logging.info(" --> COGNIT run training")
+start_time = time.perf_counter()
+result = runtime.call(
+    training_function,
+    json.dumps(train_parameters),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(heating_parameters),
+    json.dumps(user_preferences),
+)
+end_time = time.perf_counter()
+
+logging.info(f"Func result: {result}")
+logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
 
 storage_parameters["curr_charge_level"] = 50.0  # (%)
@@ -233,40 +233,38 @@ logging.info(f"Func result 2: {action = }")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
 
-# logging.info(" --> COGNIT run predict 1")
-# start_time = time.perf_counter()
-# return_code, result = runtime.call(
-#     make_decision,
-#     timestamp.timestamp(),
-#     json.dumps(S3_PARAMETERS),
-#     json.dumps(BESMART_PARAMETERS),
-#     json.dumps(home_model_parameters),
-#     json.dumps(storage_parameters),
-#     json.dumps(ev_battery_parameters),
-#     json.dumps(heating_parameters),
-#     json.dumps(user_preferences),
-# )
-# end_time = time.perf_counter()
-#
-# logging.info(f"Status code: {return_code}")
-# logging.info(f"Func result 1: {result}")
-# logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
-#
-# logging.info(" --> COGNIT run predict 2")
-# start_time = time.perf_counter()
-# return_code, result = runtime.call(
-#     make_decision,
-#     timestamp.timestamp(),
-#     json.dumps(S3_PARAMETERS),
-#     json.dumps(BESMART_PARAMETERS),
-#     json.dumps(home_model_parameters),
-#     json.dumps(storage_parameters),
-#     json.dumps(ev_battery_parameters),
-#     json.dumps(heating_parameters),
-#     json.dumps(user_preferences),
-# )
-# end_time = time.perf_counter()
-#
-# logging.info(f"Status code: {return_code}")
-# logging.info(f"Func result 2: {result}")
-# logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+logging.info(" --> COGNIT run predict 1")
+start_time = time.perf_counter()
+result = runtime.call(
+    make_decision,
+    timestamp.timestamp(),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(heating_parameters),
+    json.dumps(user_preferences),
+)
+end_time = time.perf_counter()
+
+logging.info(f"Func result 1: {result}")
+logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+
+logging.info(" --> COGNIT run predict 2")
+start_time = time.perf_counter()
+result = runtime.call(
+    make_decision,
+    timestamp.timestamp(),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(heating_parameters),
+    json.dumps(user_preferences),
+)
+end_time = time.perf_counter()
+
+logging.info(f"Func result 2: {result}")
+logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
