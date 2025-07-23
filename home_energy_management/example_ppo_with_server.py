@@ -57,7 +57,7 @@ EV_REWARD_COEFFICIENT = .8
 data_directory = 'data/'
 model_filename = 'model_scripted_from_cognit.pt'
 
-number_of_episodes = 8000
+number_of_episodes = 1000  # TODO 8-10k after timeout fix
 # Learning rate for actor-critic models
 critic_lr = 0.001
 actor_lr = 0.001
@@ -186,7 +186,7 @@ result = runtime.call(
 )
 end_time = time.perf_counter()
 
-logging.info(f"Func result: {result}")
+logging.info(f"Func result: {result.res}")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
 
@@ -248,7 +248,7 @@ result = runtime.call(
 )
 end_time = time.perf_counter()
 
-logging.info(f"Func result 1: {result}")
+logging.info(f"Func result 1: {result.res}")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
 logging.info(" --> COGNIT run predict 2")
@@ -266,5 +266,5 @@ result = runtime.call(
 )
 end_time = time.perf_counter()
 
-logging.info(f"Func result 2: {result}")
+logging.info(f"Func result 2: {result.res}")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")

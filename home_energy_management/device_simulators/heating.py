@@ -89,7 +89,7 @@ class ScheduledTempSensor(ScheduledDevice, TempSensor):
 
 
 @dataclass
-class RoomHeating(Device, DeviceUserApi):
+class Heating(Device, DeviceUserApi):
     # Physics
     heat_capacity: float  # J/K
     heating_coefficient: float  # 0-1
