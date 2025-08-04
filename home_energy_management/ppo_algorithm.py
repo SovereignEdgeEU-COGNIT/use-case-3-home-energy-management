@@ -155,7 +155,8 @@ def make_decision(
                                        month=state_datetime.month,
                                        day=state_datetime.day,
                                        hour=state_datetime.hour,
-                                       minute=state_datetime.minute - rounding_minutes)
+                                       minute=state_datetime.minute)
+    state_datetime = state_datetime - datetime.timedelta(minutes=rounding_minutes)
 
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
@@ -165,7 +166,7 @@ def make_decision(
     ev_id_list.sort()
     temp_inside = heating_parameters["curr_temp"]
     pref_temp = heating_parameters["preferred_temp"]
-    temp_window = home_model_parameters["heating_delta_temperature"]
+    temp_window = home_model_parameters["temp_window"]
 
     lower_bounds = [min_temp_setting, - storage_max_charging_power] + len(ev_id_list) * [0.]
     upper_bounds = [max_temp_setting, storage_max_charging_power] + [
@@ -771,7 +772,7 @@ def training_function(
     heating_coefficient = home_model_parameters["heating_coefficient"]
     heat_loss_coefficient = home_model_parameters["heat_loss_coefficient"]
     heat_capacity = home_model_parameters["heat_capacity"]
-    temp_window = home_model_parameters["heating_delta_temperature"]
+    temp_window = home_model_parameters["temp_window"]
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
 

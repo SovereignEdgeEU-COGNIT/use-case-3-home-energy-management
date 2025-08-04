@@ -93,7 +93,7 @@ class Heating(Device, DeviceUserApi):
     # Physics
     heat_capacity: float  # J/K
     heating_coefficient: float  # 0-1
-    heating_loss: float  # W/K
+    heat_loss_coefficient: float  # W/K
 
     # Config
     name: str
@@ -140,7 +140,7 @@ class Heating(Device, DeviceUserApi):
                 * sum(is_switch_on * power for is_switch_on, power
                       in zip(self.is_device_switch_on, self.heating_devices_power))
                 * 1000 * dt
-                - self.heating_loss * (self.curr_temp - self.get_temp_outside(now)) * dt
+                - self.heat_loss_coefficient * (self.curr_temp - self.get_temp_outside(now)) * dt
         )  # J
         dtemp = denergy / self.heat_capacity
         self.curr_temp += dtemp

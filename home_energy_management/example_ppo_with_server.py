@@ -96,7 +96,7 @@ train_parameters = {
 home_model_parameters = {
     "min_temp_setting": 17.,  # (°C)
     "max_temp_setting": 24.,  # (°C)
-    "heating_delta_temperature": 0.75,  # (°C)
+    "temp_window": 0.75,  # (°C)
     "heating_coefficient": 0.98,
     "heat_loss_coefficient": 300.,
     "heat_capacity": 3.6e7,
@@ -154,21 +154,21 @@ BESMART_PARAMETERS["till"] = (timestamp - datetime.timedelta(seconds=user_prefer
 BESMART_PARAMETERS["since"] = (BESMART_PARAMETERS["till"]
                                - datetime.timedelta(days=train_parameters["history_timedelta_days"]).total_seconds())
 
-logging.info(" --> Local run training")
-start_time = time.perf_counter()
-result = training_function(
-    train_parameters=json.dumps(train_parameters),
-    s3_parameters=json.dumps(S3_PARAMETERS),
-    besmart_parameters=json.dumps(BESMART_PARAMETERS),
-    home_model_parameters=json.dumps(home_model_parameters),
-    storage_parameters=json.dumps(storage_parameters),
-    ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
-    heating_parameters=json.dumps(heating_parameters),
-    user_preferences=json.dumps(user_preferences),
-)
-end_time = time.perf_counter()
-logging.info(f"Func result: {result = }")
-logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
+# logging.info(" --> Local run training")
+# start_time = time.perf_counter()
+# result = training_function(
+#     train_parameters=json.dumps(train_parameters),
+#     s3_parameters=json.dumps(S3_PARAMETERS),
+#     besmart_parameters=json.dumps(BESMART_PARAMETERS),
+#     home_model_parameters=json.dumps(home_model_parameters),
+#     storage_parameters=json.dumps(storage_parameters),
+#     ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
+#     heating_parameters=json.dumps(heating_parameters),
+#     user_preferences=json.dumps(user_preferences),
+# )
+# end_time = time.perf_counter()
+# logging.info(f"Func result: {result = }")
+# logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
 
 logging.info(" --> COGNIT run training")
@@ -200,37 +200,37 @@ ev_battery_parameters[1]["time_until_charged"] = 2 * 3600  # (s)
 heating_parameters["curr_temp"] = 19.0  # (°C)
 
 
-logging.info(" --> Local run predict 1")
-start_time = time.perf_counter()
-action = make_decision(
-    timestamp=timestamp.timestamp(),
-    s3_parameters=json.dumps(S3_PARAMETERS),
-    besmart_parameters=json.dumps(BESMART_PARAMETERS),
-    home_model_parameters=json.dumps(home_model_parameters),
-    storage_parameters=json.dumps(storage_parameters),
-    ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
-    heating_parameters=json.dumps(heating_parameters),
-    user_preferences=json.dumps(user_preferences),
-)
-end_time = time.perf_counter()
-logging.info(f"Func result 1: {action = }")
-logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
-
-logging.info(" --> Local run predict 2")
-start_time = time.perf_counter()
-action = make_decision(
-    timestamp=timestamp.timestamp(),
-    s3_parameters=json.dumps(S3_PARAMETERS),
-    besmart_parameters=json.dumps(BESMART_PARAMETERS),
-    home_model_parameters=json.dumps(home_model_parameters),
-    storage_parameters=json.dumps(storage_parameters),
-    ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
-    heating_parameters=json.dumps(heating_parameters),
-    user_preferences=json.dumps(user_preferences),
-)
-end_time = time.perf_counter()
-logging.info(f"Func result 2: {action = }")
-logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+# logging.info(" --> Local run predict 1")
+# start_time = time.perf_counter()
+# action = make_decision(
+#     timestamp=timestamp.timestamp(),
+#     s3_parameters=json.dumps(S3_PARAMETERS),
+#     besmart_parameters=json.dumps(BESMART_PARAMETERS),
+#     home_model_parameters=json.dumps(home_model_parameters),
+#     storage_parameters=json.dumps(storage_parameters),
+#     ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
+#     heating_parameters=json.dumps(heating_parameters),
+#     user_preferences=json.dumps(user_preferences),
+# )
+# end_time = time.perf_counter()
+# logging.info(f"Func result 1: {action = }")
+# logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+#
+# logging.info(" --> Local run predict 2")
+# start_time = time.perf_counter()
+# action = make_decision(
+#     timestamp=timestamp.timestamp(),
+#     s3_parameters=json.dumps(S3_PARAMETERS),
+#     besmart_parameters=json.dumps(BESMART_PARAMETERS),
+#     home_model_parameters=json.dumps(home_model_parameters),
+#     storage_parameters=json.dumps(storage_parameters),
+#     ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
+#     heating_parameters=json.dumps(heating_parameters),
+#     user_preferences=json.dumps(user_preferences),
+# )
+# end_time = time.perf_counter()
+# logging.info(f"Func result 2: {action = }")
+# logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
 
 logging.info(" --> COGNIT run predict 1")

@@ -20,7 +20,7 @@ def make_decision(
             dict with values for keys: workspace_key, login, password, pv_generation, energy_consumption,
             temperature_moid.
         home_model_parameters (str): JSON with parameters defining the home energy management model; dict with values
-            for keys: heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity,
+            for keys: temp_window, heating_coefficient, heat_loss_coefficient, heat_capacity,
             delta_charging_power_perc.
         storage_parameters (str): JSON with parameters defining the energy storage model; dict with values for keys:
             max_capacity, min_charge_level, efficiency, nominal_power, curr_charge_level.
@@ -219,7 +219,7 @@ def make_decision(
     energy_consumption_pred = np.diff(energy_consumption_pred)[0]
     temp_outside_pred = get_temperature_data()[0]
 
-    delta_temp = home_model_parameters["heating_delta_temperature"]
+    temp_window = home_model_parameters["temp_window"]
     heat_loss_coeff = home_model_parameters["heat_loss_coefficient"]
     heat_capacity = home_model_parameters["heat_capacity"]
     delta_charging_power_perc = home_model_parameters["delta_charging_power_perc"]
@@ -243,7 +243,7 @@ def make_decision(
     # Home heating - necessary
     (energy_for_necessary_heating, conf_temp) = check_heating_conditions(
         heating_params=heating_parameters,
-        reduction_of_allowed_temp=delta_temp,
+        reduction_of_allowed_temp=temp_window,
     )
     if energy_for_necessary_heating > 0:
         temp_configuration = conf_temp
@@ -302,7 +302,7 @@ def make_decision(
     if available_oze_energy > 0.0 and energy_for_optional_heating == 0:
         (energy_for_additional_heating, conf_temp) = check_heating_conditions(
                 heating_params=heating_parameters,
-                reduction_of_allowed_temp=-delta_temp,
+                reduction_of_allowed_temp=-temp_window,
                 available_energy=available_oze_energy,
         )
         if energy_for_additional_heating > 0:

@@ -37,7 +37,7 @@ besmart_parameters = {
 }
 
 model_parameters = {
-    "heating_delta_temperature": 0.75,
+    "temp_window": 0.75,
     "heating_coefficient": 0.98,
     "heat_loss_coefficient": 300.,
     "heat_capacity": 3.6e7,
