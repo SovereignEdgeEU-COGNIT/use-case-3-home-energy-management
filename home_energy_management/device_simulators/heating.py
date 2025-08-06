@@ -9,7 +9,7 @@ from phoenixsystems.sem.device import (
     METERSIM_NO_UPDATE_SCHEDULED,
 )
 from home_energy_management.device_simulators.device_utils import DeviceUserApi
-from home_energy_management.device_simulators.simple_device import ScheduledDevice
+from home_energy_management.device_simulators.simple_device import ScheduledDevice, ScheduledDataDevice
 
 
 class HeatingPreferences(ABC):
@@ -68,12 +68,13 @@ class LiveTempSensor(TempSensor):
         pass
 
 
-class ScheduledTempSensor(ScheduledDevice, TempSensor):
+class ScheduledTempSensor(ScheduledDataDevice, TempSensor):
     def __init__(
             self,
-            config: list[tuple[int, Any]],
-            loop: int = 0):
-        super().__init__(config, loop)
+            update_time: list[int],
+            data: list[Any]
+    ):
+        super().__init__(update_time, data)
 
     def get_temp(self, now: int) -> float:
         temp, _ = self.get_state(now)

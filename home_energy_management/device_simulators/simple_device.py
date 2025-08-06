@@ -1,5 +1,7 @@
 from typing import Any
 
+from home_energy_management.device_simulators.device_utils import make_current
+
 from phoenixsystems.sem.device import (
     Device,
     DeviceResponse,
@@ -41,18 +43,42 @@ class ScheduledDevice:
         return ret
 
 
+class ScheduledDataDevice:
+    update_time: list[int]
+    data: list[Any]
+    index: int
+
+    def __init__(self, update_time: list[int], data: list[Any]):
+        assert len(update_time) == len(data)
+        self.update_time = update_time
+        self.data = data
+        self.index = 0
+
+    def get_state(self, now: int) -> tuple[Any, int]:
+        if self.index == len(self.update_time) - 1:
+            return self.data[self.index], -1
+        if now >= self.update_time[self.index + 1]:
+            self.index += 1
+        return self.data[self.index], self.update_time[self.index + 1]
+
+
 class SimpleDevice(Device):
     current: list[complex]
 
 
-class SimpleScheduledDevice(ScheduledDevice, SimpleDevice):
-    def __init__(self, config: list[tuple[int, Any]], loop: int = 0):
-        super().__init__(config, loop)
+class SimpleScheduledDevice(ScheduledDataDevice, SimpleDevice):
+    def __init__(
+            self,
+            update_time: list[int],
+            data: list[Any]
+    ):
+        super().__init__(update_time, data)
         self.current = [0.0, 0.0, 0.0]
 
     def update(self, info: InfoForDevice) -> DeviceResponse:
-        current, next_update_time = self.get_state(info.now)
-        self.current = [complex(x) for x in current]
+        power, next_update_time = self.get_state(info.now)
+        current = [power / 230., 0.0, 0.0]
+        self.current = make_current([power / 230., 0, 0])
         return DeviceResponse(current, next_update_time)
 
 
