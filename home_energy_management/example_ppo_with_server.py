@@ -198,6 +198,7 @@ ev_battery_parameters[1]["curr_charge_level"] = 60.0  # (%)
 ev_battery_parameters[1]["is_available"] = True
 ev_battery_parameters[1]["time_until_charged"] = 2 * 3600  # (s)
 heating_parameters["curr_temp"] = 19.0  # (°C)
+home_model_parameters["state_range"] = json.loads(result.res[0])
 
 
 # logging.info(" --> Local run predict 1")

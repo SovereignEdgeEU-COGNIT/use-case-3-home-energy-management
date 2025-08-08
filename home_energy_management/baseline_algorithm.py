@@ -62,21 +62,27 @@ def make_decision(
         )
         return r.json()["token"]
 
-    def get_data_from_besmart(cid: int,
-                              mid: int,
-                              moid: int) -> dict:
+    def get_data_from_besmart(
+            cid: int,
+            mid: int,
+            moid: int,
+            is_cumulative: bool = False
+    ) -> dict:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'Authorization': f'Bearer {token}'
         }
-        till_datetime = np.datetime64(state_datetime) + np.timedelta64(cycle_timedelta_s, 's')
+        since_datetime = np.datetime64(int(state_datetime.timestamp()), 's')
+        if is_cumulative:
+            since_datetime -= np.timedelta64(3600, 's')
+        till_datetime = np.datetime64(int(state_datetime.timestamp()), 's') + np.timedelta64(cycle_timedelta_s, 's')
         body = [{
             "client_cid": cid,
             "sensor_mid": mid,
             "signal_type_moid": moid,
-            "since": int(np.datetime64(state_datetime).astype(int) / 1000),
-            "till": int(till_datetime.astype(int) / 1000),
+            "since": int(since_datetime.astype(int) * 1000),
+            "till": int(till_datetime.astype(int) * 1000),
             "get_last": True,
         }]
         res = requests.post(
@@ -85,23 +91,31 @@ def make_decision(
         )
         return res.json()[0]['data']
 
-    def get_energy_data(identifier: dict[str, int]) -> np.ndarray:
+    def get_energy_data(
+            identifier: dict[str, int],
+            is_cumulative: bool = False
+    ) -> float:
         data = get_data_from_besmart(identifier["cid"],
                                      identifier["mid"],
-                                     identifier["moid"], )
-        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
+                                     identifier["moid"],
+                                     is_cumulative)
         value = np.array(data['value'])
         origin = np.array(data['origin'])
 
         pred_value = value[origin == 2]
-        pred_time = time[origin == 2]
+        if is_cumulative:
+            pred_time = (np.array(data['time']) / 1e3).astype(int)[origin == 2]
+            state_index = np.where(pred_time >= state_datetime.timestamp())[0][0]
+            pred_value = pred_value[state_index - 1:state_index + 1]
+            pred_time = pred_time[state_index - 1:state_index + 1]
+            pred_value = np.diff(pred_value) / (np.diff(pred_time) / 3600)
 
-        if len(pred_value) < 2:
+        if len(pred_value) < 1:
             raise Exception('Not enough data for decision-making')
 
-        return pred_value
+        return pred_value[0]
 
-    def get_temperature_data() -> np.ndarray:
+    def get_temperature_data() -> float:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -132,16 +146,13 @@ def make_decision(
         )
         data = res.json()['data']
 
-        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
         value = np.array(data['value'])
         origin = np.array(data['origin'])
         estm_value = value[origin == 3]
-        estm_time = time[origin == 3]
-
-        if len(estm_value) < 2:
+        if len(estm_value) < 1:
             raise Exception('Not enough data for decision-making')
 
-        return estm_value - 272.15
+        return estm_value[0] - 272.15
 
     def check_heating_conditions(
             heating_params: dict,
@@ -193,7 +204,6 @@ def make_decision(
 
         return 0.0, 0.0, energy_needed - energy_pv_produced - energy_in_storage
 
-
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
@@ -214,10 +224,9 @@ def make_decision(
                                        minute=state_datetime.minute - rounding_minutes)
 
     token = authenticate_to_besmart()
-    pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])[0]
-    energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"])
-    energy_consumption_pred = np.diff(energy_consumption_pred)[0]
-    temp_outside_pred = get_temperature_data()[0]
+    pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
+    energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
+    temp_outside_pred = get_temperature_data()
 
     temp_window = home_model_parameters["temp_window"]
     heat_loss_coeff = home_model_parameters["heat_loss_coefficient"]
