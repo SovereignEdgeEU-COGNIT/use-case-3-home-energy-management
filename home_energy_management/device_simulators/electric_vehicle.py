@@ -40,6 +40,10 @@ class ElectricVehicle(Device, DeviceUserApi):
     last_capacity_update: int
     voltage: list[complex]  # V
 
+    def set_getter_of_driving_power(self, get_driving_power: Callable[[int], float]):
+        self.update_capacity(self.get_time())
+        self.get_driving_power = get_driving_power
+
     def update_capacity(self, now: int) -> int:
         dt = now - self.last_capacity_update
         self.last_capacity_update = now
@@ -140,12 +144,16 @@ class EVDriving(Device, DeviceUserApi, ABC):
 
 
 class ScheduledEVDriving(EVDriving, ScheduledDevice):
-    def __init__(
-            self,
-            config: list[tuple[float, Any]],
-            loop: int = 0):
+    def __init__(self, daily_schedule: dict[str, list]):
+        time_list = daily_schedule['time']
+        value_list = daily_schedule['driving_power']
+        config = []
+        for time, value in zip(time_list, value_list):
+            datetime_time = datetime.strptime(time, "%H:%M").time()
+            seconds_from_start = (datetime_time.hour * 60 + datetime_time.minute) * 60
+            config.append((seconds_from_start, value))
         EVDriving.__init__(self)
-        ScheduledDevice.__init__(self, config, loop)
+        ScheduledDevice.__init__(self, config, 24 * 3600)
 
     def get_driving_power(self, now: int) -> float:
         driving_power, _ = self.get_state(now)
@@ -189,12 +197,16 @@ class EVDeparturePlans(Device, ABC):
 
 
 class ScheduledEVDeparturePlans(EVDeparturePlans, ScheduledDevice, Device):
-    def __init__(
-            self,
-            config: list[tuple[int, Any]],
-            loop: int = 0):
+    def __init__(self, daily_schedule: dict[str, list]):
+        time_list = daily_schedule['time']
+        value_list = daily_schedule['driving_power']
+        config = []
+        for time, value in zip(time_list, value_list):
+            datetime_time = datetime.strptime(time, "%H:%M").time()
+            seconds_from_start = (datetime_time.hour * 60 + datetime_time.minute) * 60
+            config.append((seconds_from_start, value))
         EVDeparturePlans.__init__(self)
-        ScheduledDevice.__init__(self, config, loop)
+        ScheduledDevice.__init__(self, config, 24 * 3600)
 
     def get_time_until_departure(self) -> int:
         now = self.get_time()

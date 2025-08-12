@@ -1,3 +1,4 @@
+import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -19,8 +20,15 @@ class HeatingPreferences(ABC):
 
 
 class ScheduledHeatingPreferences(HeatingPreferences, ScheduledDevice, Device):
-    def __init__(self, config: list[tuple[int, Any]], loop: int = 0):
-        super().__init__(config, loop)
+    def __init__(self, daily_schedule: dict[str, list]):
+        config = []
+        time_list = daily_schedule['time']
+        value_list = daily_schedule['temp']
+        for time, value in zip(time_list, value_list):
+            datetime_time = datetime.datetime.strptime(time, "%H:%M").time()
+            seconds_from_start = (datetime_time.hour * 60 + datetime_time.minute) * 60
+            config.append((seconds_from_start, value))
+        super().__init__(config, 24 * 3600)
 
     def get_temp(self) -> float:
         temp, _ = self.get_state(self.get_time())
