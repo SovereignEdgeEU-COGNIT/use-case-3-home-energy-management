@@ -5,6 +5,7 @@ import time
 
 from cognit import device_runtime
 
+from access_config import S3_PARAMETERS, BESMART_PARAMETERS
 from ppo_algorithm import make_decision, training_function
 
 logging.basicConfig(level=logging.INFO)
@@ -18,31 +19,6 @@ REQS_INIT = {
         "latitude": 43.05,
         "longitude": -2.53,
     },
-}
-
-S3_PARAMETERS = {
-    "endpoint_url": "https://s3.sovereignedge.eu/",
-    "bucket_name": "uc3-test-bucket",
-    "model_filename": "files/onnx_model_from_cognit.onnx",
-    "access_key_id": "eXuxY2Gt4bI8PTScQ9gz",
-    "secret_access_key": "RtomdwwpoN7tkQe6ZZSPZTGScvQ0GtEwVhObreo4",
-}
-
-BESMART_PARAMETERS = {
-    "workspace_key": "wubbalubbadubdub",
-    "login": "cognit_demo",
-    "password": "CognitDemo2025!",
-    "pv_generation": {
-        "cid": 68,
-        "mid": 84,
-        "moid": 70,
-    },
-    "energy_consumption": {
-        "cid": 68,
-        "mid": 83,
-        "moid": 32,
-    },
-    "temperature_moid": 139,
 }
 
 runtime = device_runtime.DeviceRuntime("cognit.yml")

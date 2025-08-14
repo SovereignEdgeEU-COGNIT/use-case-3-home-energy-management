@@ -5,6 +5,7 @@ import time
 
 from cognit import device_runtime
 
+from access_config import BESMART_PARAMETERS
 from baseline_algorithm import make_decision
 
 logging.basicConfig(level=logging.INFO)
@@ -18,23 +19,6 @@ REQS_INIT = {
 }
 
 timestamp = datetime.datetime.fromisoformat('2023-06-16 05:00:00')
-
-besmart_parameters = {
-    "workspace_key": "wubbalubbadubdub",
-    "login": "cognit_demo",
-    "password": "CognitDemo2025!",
-    "pv_generation": {
-        "cid": 68,
-        "mid": 84,
-        "moid": 70,
-    },
-    "energy_consumption": {
-        "cid": 68,
-        "mid": 83,
-        "moid": 32,
-    },
-    "temperature_moid": 139,
-}
 
 model_parameters = {
     "temp_window": 0.75,
@@ -96,7 +80,7 @@ user_preferences = {
 result = make_decision(
     timestamp=timestamp.timestamp(),
     s3_parameters=None,
-    besmart_parameters=json.dumps(besmart_parameters),
+    besmart_parameters=json.dumps(BESMART_PARAMETERS),
     home_model_parameters=json.dumps(model_parameters),
     storage_parameters=json.dumps(storage_parameters),
     ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
@@ -117,7 +101,7 @@ result = runtime.call(
     make_decision,
     timestamp.timestamp(),
     None,
-    json.dumps(besmart_parameters),
+    json.dumps(BESMART_PARAMETERS),
     json.dumps(model_parameters),
     json.dumps(storage_parameters),
     json.dumps(ev_battery_parameters),

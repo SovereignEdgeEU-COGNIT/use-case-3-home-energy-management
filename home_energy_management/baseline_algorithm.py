@@ -16,7 +16,7 @@ def make_decision(
     Args:
         timestamp (float): Current timestamp, for which decision is made.
         s3_parameters: For this implementation parameter is ignored as not needed.
-        besmart_parameters (str): JSON with parameters used for authentication to besmart API and downloading data;
+        besmart_parameters (str): JSON with parameters used for authentication to besmart.energy API and downloading data;
             dict with values for keys: workspace_key, login, password, pv_generation, energy_consumption,
             temperature_moid.
         home_model_parameters (str): JSON with parameters defining the home energy management model; dict with values
