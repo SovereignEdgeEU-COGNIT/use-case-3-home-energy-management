@@ -11,39 +11,33 @@ pip install use-case-3-home-energy-managment
 ```
 
 ### Decision algorithm
-Decision algorithm makes decision based on current values (without any predictions of future). It is assumed it knows 
-ideal models of end devices, so can compute energy distributed between them during next time step. Implemented function 
-can be used locally or offloaded to COGNIT server. 
+There are two versions of decision algorithms. Baseline version makes decision based only on current values using 
+predefined scheme of consumption needs and importance. AI version of algorithm uses model trained using PPO learning 
+function to optimise parameters of controlled devices for next 24 hours and is based on predictions of energy data. 
+It is assumed it knows ideal models of end devices, so can compute energy distributed between them during next time 
+step. Implemented functions can be used locally or offloaded to COGNIT server. 
 Input parameters:
-- model_parameters - parameters defining the home energy management model; dict with values for keys: 
-heating_delta_temperature, heating_coefficient, heat_loss_coefficient, heat_capacity, delta_charging_power_perc,
-- step_timedelta_s - duration of one step in seconds,
-- storage_parameters - parameters defining the energy storage model; dict with values for keys: max_capacity, 
-min_charge_level, efficiency, nominal_power,
-- ev_battery_parameters - parameters defining the EV battery model; dict with values for keys: max_capacity, 
-charged_level, efficiency, nominal_power, is_available, time_until_charged,
-- room_heating_params_list - parameters defining the heating model for individual rooms; list with dicts, each 
-containing values for keys: name, powers_of_heating_devices,
-- energy_drawn_from_grid - active energy drawn from the grid in the previous step in kWh,
-- energy_returned_to_grid - active energy returned to the grid in the previous step in kWh,
-- energy_pv_produced - energy produced by PV matrix in the previous step in kWh,
-- temp_outdoor - current outdoor temperature in °C,
-- charge_level_of_storage - current charge level of storage in %,
-- prev_charge_level_of_storage - charge level of storage before previous step in %,
-- heating_status_per_room - statuses of heating devices switches; dict with list of booleans representing status per 
-key which is room name,  
-- temp_per_room - measured temperature per room in °C.
+
+- `timestamp` - current timestamp, for which decision is made,
+- `s3_parameters` - JSON with parameters used for authentication to s3 service and downloading file with trained model 
+(for baseline implementation parameter is ignored as not needed),
+- `besmart_parameters` - JSON with parameters used for authentication to besmart.energy API and downloading data,
+- `home_model_parameters` - JSON with parameters defining the home energy management model; dict with values for keys: 
+temp_window, heating_coefficient, heat_loss_coefficient, heat_capacity, delta_charging_power_perc,
+- `storage_parameters` - JSON with parameters defining the energy storage model; dict with values for keys: 
+max_capacity, min_charge_level, efficiency, nominal_power, curr_charge_level,
+- `ev_battery_parameters_per_id` - JSON with parameters defining per EV battery model; dict of dicts with values for 
+keys: max_capacity, driving_charge_level, efficiency, nominal_power, is_available, time_until_charged, curr_charge_level,
+- `heating_parameters` - JSON with parameters defining the heating model for home; dict with values for keys: name, 
+curr_temp, preferred_temp, powers_of_heating_devices, is_device_switch_on,
+- `user_preferences` - JSON with user preferences, i.a. cycle_timedelta_s - time duration of one cycle in seconds.
 
 Returns tuple of variables representing:
 - configuration of temperature per room in °C,
 - configuration of energy storage (charging and discharging power limits [percent of nominal power], mode of operation),
-- configuration of EV battery (charging and discharging power limits [percent of nominal power], mode of operation),
-- predicted temperature per room in °C,
-- predicted charge level of energy storage in %,
-- predicted charge level of EV battery in %,
-- predicted energy needed from power grid in kWh.
+- configuration of EV battery (charging and discharging power limits [percent of nominal power], mode of operation).
 
-Simple example of usage of decision algorithm is in `example.py`.
+Simple example of usage of decision algorithm can be found in `example_with_server.py` and `example_ppo_with_server.py`.
 
 ### Devices
 Package `device_simulators` includes implementations of class `Device` from library `phoenixsystems-sem` for individual 

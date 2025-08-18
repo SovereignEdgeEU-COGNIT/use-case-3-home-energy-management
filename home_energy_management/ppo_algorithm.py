@@ -1,76 +1,241 @@
-from typing import Any
-
-import numpy as np
-import torch
-
 def make_decision(
         timestamp: float,
-        model_bytes: bytes,
-        home_model_parameters: dict[str, float],
-        storage_parameters: dict[str, float],
-        ev_battery_parameters: dict[str, float],
-        room_heating_params_list: list[dict],
-        pv_generation: float,
-        uncontrolled_consumption: float,
-        temp_outside: float,
-        cycle_timedelta_s: int,
-) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    import io
-    from datetime import datetime
+        s3_parameters: str,
+        besmart_parameters: str,
+        home_model_parameters: str,
+        storage_parameters: str,
+        ev_battery_parameters_per_id: str,
+        heating_parameters: str,
+        user_preferences: str,
+) -> tuple[float, str, str]:
+    import datetime
+    import json
+    from io import BytesIO
 
+    import boto3
     import numpy as np
+    import onnx
     import torch
+    import requests
+    from onnx2torch import convert
 
-    def select_action(jit_model: torch.jit.RecursiveScriptModule,
-                      tensor_state: torch.Tensor) -> np.ndarray:
+    def select_action(
+            actor_model: torch.fx.graph_module.GraphModule,
+            tensor_state: torch.Tensor,
+            lower_bounds: list[float],
+            upper_bounds: list[float]
+    ) -> np.ndarray:
         with torch.no_grad():
             tensor_state = torch.FloatTensor(tensor_state).to(device)
-            tensor_action = jit_model.actor(tensor_state)
+            tensor_action = actor_model(tensor_state)
 
         tensor_action = tensor_action.detach().cpu().numpy().flatten()
-        tensor_action[0] = tensor_action[0] * (jit_model.upper_bounds[0] - jit_model.lower_bounds[0]) / 2 + (
-                jit_model.upper_bounds[0] + jit_model.lower_bounds[0]) / 2
-        tensor_action[1] = tensor_action[1] * jit_model.upper_bounds[1]
-        tensor_action[2] = (tensor_action[2] + 1) * jit_model.upper_bounds[2] / 2
-        tensor_action = np.clip(tensor_action, jit_model.lower_bounds, jit_model.upper_bounds)
+        tensor_action[0] = tensor_action[0] * (upper_bounds[0] - lower_bounds[0]) / 2 + (
+                upper_bounds[0] + lower_bounds[0]) / 2
+        tensor_action[1] = tensor_action[1] * upper_bounds[1]
+        for i in range(len(ev_id_list)):
+            tensor_action[2 + i] = (tensor_action[2 + i] + 1) * upper_bounds[2 + i] / 2
+        tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
 
+    def authenticate_to_besmart() -> str:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Auth': besmart_parameters['workspace_key'],
+        }
+        body = {
+            "login": besmart_parameters["login"],
+            "password": besmart_parameters["password"],
+        }
+        r = requests.post(
+            'https://api.besmart.energy/api/users/token',
+            headers=headers,
+            json=body
+        )
+        return r.json()["token"]
+
+    def get_data_from_besmart(
+            cid: int,
+            mid: int,
+            moid: int,
+            is_cumulative: bool = False
+    ) -> dict:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+        since_datetime = np.datetime64(int(state_datetime.timestamp()), 's')
+        if is_cumulative:
+            since_datetime -= np.timedelta64(3600, 's')
+        till_datetime = np.datetime64(int(state_datetime.timestamp()), 's') + np.timedelta64(cycle_timedelta_s, 's')
+        body = [{
+            "client_cid": cid,
+            "sensor_mid": mid,
+            "signal_type_moid": moid,
+            "since": int(since_datetime.astype(int) * 1000),
+            "till": int(till_datetime.astype(int) * 1000),
+            "get_last": True,
+        }]
+        res = requests.post(
+            'https://api.besmart.energy/api/sensors/signals/data',
+            headers=headers, json=body
+        )
+        return res.json()[0]['data']
+
+    def get_energy_data(
+            identifier: dict[str, int],
+            is_cumulative: bool = False
+    ) -> float:
+        data = get_data_from_besmart(identifier["cid"],
+                                     identifier["mid"],
+                                     identifier["moid"],
+                                     is_cumulative)
+        value = np.array(data['value'])
+        origin = np.array(data['origin'])
+
+        pred_value = value[origin == 2]
+        if is_cumulative:
+            pred_time = (np.array(data['time']) / 1e3).astype(int)[origin == 2]
+            state_index = np.where(pred_time >= state_datetime.timestamp())[0][0]
+            pred_value = pred_value[state_index - 1:state_index + 1]
+            pred_time = pred_time[state_index - 1:state_index + 1]
+            pred_value = np.diff(pred_value) / (np.diff(pred_time) / 3600)
+
+        if len(pred_value) < 1:
+            raise Exception('Not enough data for decision-making')
+
+        return pred_value[0]
+
+    def get_temperature_data() -> float:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+        sensor_identifier = besmart_parameters["energy_consumption"]
+        sensor = requests.get(
+            f'https://api.besmart.energy/api/sensors/{sensor_identifier["cid"]}.{sensor_identifier["mid"]}',
+            headers=headers,
+        ).json()
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Auth': besmart_parameters['workspace_key'],
+        }
+        till_datetime = np.datetime64(state_datetime) + np.timedelta64(cycle_timedelta_s, 's')
+        params = {
+            "since": int(np.datetime64(state_datetime).astype(int) / 1000),
+            "till": int(till_datetime.astype(int) / 1000),
+            'delta_t': cycle_timedelta_s // 60,
+            'raw': False,
+            'get_last': True,
+        }
+        res = requests.get(
+            f'https://api.besmart.energy/api/weather/{sensor["lat"]}/{sensor["lon"]}/{besmart_parameters["temperature_moid"]}/data',
+            headers=headers, params=params
+        )
+        data = res.json()['data']
+
+        value = np.array(data['value'])
+        origin = np.array(data['origin'])
+        estm_value = value[origin == 3]
+        if len(estm_value) < 1:
+            raise Exception('Not enough data for decision-making')
+
+        return estm_value[0] - 272.15
+
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = torch.jit.load(io.BytesIO(model_bytes))
+    s3_parameters = json.loads(s3_parameters)
+    besmart_parameters = json.loads(besmart_parameters)
+    home_model_parameters = json.loads(home_model_parameters)
+    storage_parameters = json.loads(storage_parameters)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    heating_parameters = json.loads(heating_parameters)
+    user_preferences = json.loads(user_preferences)
+
+    state_datetime = datetime.datetime.fromtimestamp(timestamp)
+    cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
+    cycle_timedelta_min = cycle_timedelta_s // 60
+    rounding_minutes = state_datetime.minute % cycle_timedelta_min
+    if rounding_minutes > cycle_timedelta_min / 2:
+        rounding_minutes = - (cycle_timedelta_min - rounding_minutes)
+    state_datetime = datetime.datetime(year=state_datetime.year,
+                                       month=state_datetime.month,
+                                       day=state_datetime.day,
+                                       hour=state_datetime.hour,
+                                       minute=state_datetime.minute)
+    state_datetime = state_datetime - datetime.timedelta(minutes=rounding_minutes)
 
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
     storage_max_charging_power = storage_parameters["nominal_power"]
     storage_soc = storage_parameters["curr_charge_level"]
-    is_ev_available = ev_battery_parameters["is_available"]
-    hours_till_ev_departure = ev_battery_parameters["time_until_charged"] / 3600
-    ev_max_charging_power = ev_battery_parameters["nominal_power"]
-    ev_soc = ev_battery_parameters["curr_charge_level"]
-    temp_inside = np.mean(np.array([room["curr_temp"] for room in room_heating_params_list]))
-    pref_temp = np.mean(np.array([room["preferred_temp"] for room in room_heating_params_list]))
-    temp_window = home_model_parameters["heating_delta_temperature"]
+    ev_id_list = list(ev_battery_parameters_per_id.keys())
+    ev_id_list.sort()
+    temp_inside = heating_parameters["curr_temp"]
+    pref_temp = heating_parameters["preferred_temp"]
+    temp_window = home_model_parameters["temp_window"]
+    state_range = home_model_parameters["state_range"]
+    pv_generation_range = state_range["pv_generation"]
+    energy_consumption_range = state_range["energy_consumption"]
+    temp_outside_range = state_range["temperature"]
+
+    lower_bounds = [min_temp_setting, - storage_max_charging_power] + len(ev_id_list) * [0.]
+    upper_bounds = [max_temp_setting, storage_max_charging_power] + [
+        ev_battery_parameters_per_id[ev_id]["nominal_power"] for ev_id in ev_id_list]
+
+    token = authenticate_to_besmart()
+    pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
+    energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
+    temp_outside_pred = get_temperature_data()
+
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=s3_parameters["endpoint_url"],
+        aws_access_key_id=s3_parameters["access_key_id"],
+        aws_secret_access_key=s3_parameters["secret_access_key"],
+    )
+    stream = BytesIO()
+    s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=s3_parameters["model_filename"], Fileobj=stream)
+    stream.seek(0)
+    onnx_model = onnx.load_model_from_string(stream.getvalue())
+    model = convert(onnx_model)
 
     state = (
-        float(is_ev_available),
-        datetime.fromtimestamp(timestamp).hour / 24,
-        hours_till_ev_departure / 24,
-        pv_generation / 3,
-        uncontrolled_consumption / 3,
+        (state_datetime.hour + state_datetime.minute / 60) / 24,
+        (pv_generation_pred - pv_generation_range[0]) / (pv_generation_range[1] - pv_generation_range[0]),
+        (energy_consumption_pred - energy_consumption_range[0]) / (energy_consumption_range[1] - energy_consumption_range[0]),
         (temp_inside - min_temp_setting) / max_temp_setting,
-        (pref_temp - temp_window - min_temp_setting) / max_temp_setting,
-        (pref_temp + temp_window - min_temp_setting) / max_temp_setting,
-        temp_outside / 30,
+        (temp_inside - (pref_temp - temp_window)) / (max_temp_setting - min_temp_setting),
+        (pref_temp + temp_window - temp_inside) / (max_temp_setting - min_temp_setting),
+        (temp_outside_pred - temp_outside_range[0]) / (temp_outside_range[1] - temp_outside_range[0]),
         storage_soc / 100,
-        ev_soc / 100,
     )
+    for ev_id in ev_id_list:
+        ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+        is_ev_available = ev_battery_parameters["is_available"]
+        hours_till_ev_departure = ev_battery_parameters["time_until_charged"] / 3600
+        ev_soc = ev_battery_parameters["curr_charge_level"]
+        state += (
+            is_ev_available,
+            hours_till_ev_departure / 24,
+            ev_soc / 100,
+        )
 
-    action = select_action(model, torch.tensor(state, dtype=torch.float).unsqueeze(0))
-    (temp_setting, storage_charging_power, ev_charging_power) = action
-
-    conf_temp_per_room = {}
-    for room in room_heating_params_list:
-        conf_temp_per_room[room["name"]] = temp_setting
+    action = select_action(
+        model,
+        torch.tensor(state, dtype=torch.float).unsqueeze(0),
+        lower_bounds,
+        upper_bounds,
+    )
+    temp_setting = action[0]
+    storage_charging_power = action[1]
+    ev_charging_power_list = action[2:]
 
     storage_params = {"InWRte": 0.0, "OutWRte": 0.0}
     if storage_charging_power > 0:
@@ -80,106 +245,130 @@ def make_decision(
         storage_params["OutWRte"] = - storage_charging_power / storage_max_charging_power * 100.
         storage_params["StorCtl_Mod"] = 2
 
-    ev_params = {"InWRte": 0.0, "OutWRte": 0.0}
-    if ev_charging_power > 0:
-        ev_params["InWRte"] = ev_charging_power / ev_max_charging_power * 100.
-        ev_params["StorCtl_Mod"] = 1
-    else:
-        ev_params["StorCtl_Mod"] = 0
+    ev_params_per_id = {}
+    for ev_id, ev_charging_power in zip(ev_id_list, ev_charging_power_list):
+        ev_max_charging_power = ev_battery_parameters_per_id[ev_id]["nominal_power"]
+        ev_params = {"InWRte": 0.0, "OutWRte": 0.0}
+        if ev_charging_power > 0:
+            ev_params["InWRte"] = ev_charging_power / ev_max_charging_power * 100.
+            ev_params["StorCtl_Mod"] = 1
+        else:
+            ev_params["StorCtl_Mod"] = 0
+        ev_params_per_id[ev_id] = ev_params
 
     return (
-        conf_temp_per_room,
-        storage_params,
-        ev_params,
+        temp_setting,
+        json.dumps(storage_params),
+        json.dumps(ev_params_per_id),
     )
 
 
 def training_function(
-        train_parameters: dict[str, Any],
-        home_model_parameters: dict[str, Any],
-        storage_parameters: dict[str, float],
-        ev_battery_parameters: dict[str, float],
-        heating_parameters: dict[str, Any],
-        cycle_timedelta_s: int,
-        timestamps_hour: np.ndarray[int],
-        pv_generation_train: np.ndarray[float],
-        pv_generation_pred_train: np.ndarray[float],
-        uncontrolled_consumption_train: np.ndarray[float],
-        uncontrolled_consumption_pred_train: np.ndarray[float],
-        temp_outside_train: np.ndarray[float],
-        temp_outside_pred_train: np.ndarray[float],
-
-) -> torch.nn.Module:
+        train_parameters: str,
+        s3_parameters: str,
+        besmart_parameters: str,
+        home_model_parameters: str,
+        storage_parameters: str,
+        ev_battery_parameters_per_id: str,
+        heating_parameters: str,
+        user_preferences: str,
+) -> tuple[str, list[float]] | str:
+    import datetime
+    import json
     import logging
     import math
+    from io import BytesIO
+    from typing import Any
 
+    import boto3
     import numpy as np
     import torch
+    import requests
     from torch import nn
     from torch.distributions import MultivariateNormal
     from torch.utils.data import TensorDataset, DataLoader
 
-    def get_state(index: int) -> tuple[float, float, float, float, float, float, float, float, float, float, float]:
-        ev_driving_power = ev_driving_state["driving_power"]
-        hours_till_ev_departure = ev_driving_state["hours_till_departure"]
-
-        return (
-            float(ev_driving_power == 0.),
-            hour / 24,
-            hours_till_ev_departure / 24,
-            pv_generation_pred_list[index] / 3,
-            uncontrolled_consumption_pred_list[index] / 3,
+    def get_state(index: int) -> tuple[float, ...]:
+        state = (
+            (time.hour + time.minute / 60) / 24,
+            pv_generation_pred_list[index] / pv_generation_max,
+            energy_consumption_pred_list[index] / energy_consumption_max,
             (temp_inside - min_temp_setting) / max_temp_setting,
-            (pref_temperature - temp_window - min_temp_setting) / max_temp_setting,
-            (pref_temperature + temp_window - min_temp_setting) / max_temp_setting,
-            temp_outside_pred_list[index] / 30,
+            (temp_inside - (pref_temperature - temp_window)) / (max_temp_setting - min_temp_setting),
+            (pref_temperature + temp_window - temp_inside) / (max_temp_setting - min_temp_setting),
+            (temp_outside_list[index] - temp_outside_min) / (temp_outside_max - temp_outside_min),
             storage_soc / 100,
-            ev_soc / 100,
         )
 
-    def get_ev_driving_state() -> dict[str, float]:
-        ev_schedule_ind = np.where(hour >= np.array(ev_driving_schedule["hour"]))[0][-1]
+        for ev_id in ev_id_list:
+            ev_driving_state = ev_driving_state_per_id[ev_id]
+            ev_driving_power = ev_driving_state["driving_power"]
+            hours_till_ev_departure = ev_driving_state["time_till_departure"].seconds / 3600
+            state += (
+                float(ev_driving_power == 0.),
+                hours_till_ev_departure / 24,
+                ev_soc_per_id[ev_id] / 100,
+            )
+
+        return state
+
+    def get_ev_driving_state(ev_driving_schedule: dict[str, Any]) -> dict[str, Any]:
+        ev_driving_time = ev_driving_schedule["time"]
+        ev_schedule_ind = np.where(time >= ev_driving_time)[0][-1]
         ev_driving_power = ev_driving_schedule["driving_power"][ev_schedule_ind]
 
         next_driving_power_arr = np.array(ev_driving_schedule["driving_power"][ev_schedule_ind + 1:]
                                           + ev_driving_schedule["driving_power"][:ev_schedule_ind + 1])
-        next_driving_hour_list = (ev_driving_schedule["hour"][ev_schedule_ind + 1:]
-                                  + (np.array(ev_driving_schedule["hour"][:ev_schedule_ind + 1]) + 24.).tolist())
-        next_ev_departure_hour = next_driving_hour_list[np.where(next_driving_power_arr > 0.)[0][0]]
-        hours_till_ev_departure = next_ev_departure_hour - hour
+        next_driving_time_arr = np.concatenate((ev_driving_time[ev_schedule_ind + 1:],
+                                                ev_driving_time[:ev_schedule_ind + 1]))
+        next_ev_departure_time = next_driving_time_arr[np.where(next_driving_power_arr > 0.)[0][0]]
+        next_ev_departure_timestamp = datetime.datetime.strptime(
+            f"{next_ev_departure_time.hour}:{next_ev_departure_time.minute}", "%H:%M")
+        if next_ev_departure_time < time:
+            next_ev_departure_timestamp = next_ev_departure_timestamp + datetime.timedelta(days=1)
+        time_till_ev_departure = (next_ev_departure_timestamp
+                                  - datetime.datetime.strptime(f"{time.hour}:{time.minute}", "%H:%M"))
 
         return {
             "driving_power": ev_driving_power,
-            "hours_till_departure": hours_till_ev_departure,
+            "time_till_departure": time_till_ev_departure,
         }
 
     def get_preferred_temperature() -> float:
-        pref_temp_schedule_ind = np.where(hour >= np.array(pref_temp_schedule["hour"]))[0][-1]
+        pref_temp_schedule_ind = np.where(time >= pref_temp_schedule_time)[0][-1]
         return pref_temp_schedule["temp"][pref_temp_schedule_ind]
 
 
-    def get_reward(controlled_consumption_t: float,
-                   temp_inside_t: float,
-                   storage_soc_t: float,
-                   ev_soc_t: float,
-                   dt: int) -> float:
-        energy_balance = pv_generation - uncontrolled_consumption - controlled_consumption_t
+    def get_reward(
+            controlled_consumption_t: float,
+            temp_inside_t: float,
+            storage_soc_t: float,
+            ev_soc_per_id_t: dict[int, float],
+            dt: int
+    ) -> float:
+        energy_balance = pv_generation - energy_consumption - controlled_consumption_t
         temperature_error = max(np.abs(temp_inside_t - pref_temperature) - temp_window, 0.)
         storage_soc_error = (max(storage_soc_t - 100., 0.)
                              + max(storage_min_charge_level - storage_soc_t, 0.)
                              ) / 100. * storage_max_capacity
 
-        ev_driving_power = ev_driving_state["driving_power"]
-        hours_till_ev_departure = ev_driving_state["hours_till_departure"]
-        if ev_driving_power == 0.:
-            ev_soc_error = (max(ev_soc_t - 100., 0.)
-                            + max(ev_min_charge_level - ev_soc_t, 0.)
-                            ) / 100. * ev_max_capacity
-            if hours_till_ev_departure * 3600. <= dt:
-                ev_soc_departure_error = max(ev_driving_charge_level - ev_soc_t, 0.) / 100. * ev_max_capacity
-                ev_soc_error += ev_soc_departure_error
-        else:
-            ev_soc_error = 0
+        ev_soc_error = 0
+        for ev_id in ev_id_list:
+            ev_driving_state = ev_driving_state_per_id[ev_id]
+            ev_driving_power = ev_driving_state["driving_power"]
+            time_till_ev_departure = ev_driving_state["time_till_departure"].seconds
+            ev_soc_t = ev_soc_per_id_t[ev_id]
+            if ev_driving_power == 0.:
+                ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+                ev_min_charge_level = ev_battery_parameters["min_charge_level"]
+                ev_max_capacity = ev_battery_parameters["max_capacity"]
+                ev_soc_error += (max(ev_soc_t - 100., 0.)
+                                 + max(ev_min_charge_level - ev_soc_t, 0.)
+                                 ) / 100. * ev_max_capacity
+                if time_till_ev_departure <= dt:
+                    ev_driving_charge_level = ev_battery_parameters["driving_charge_level"]
+                    ev_soc_error += max(ev_driving_charge_level - ev_soc_t, 0.) / 100. * ev_max_capacity
+
 
         energy_balance_reward = - energy_reward_coeff * np.abs(energy_balance)
         temperature_reward = - temp_reward_coeff * temperature_error
@@ -187,12 +376,16 @@ def training_function(
         ev_reward = - ev_reward_coeff * ev_soc_error
         return energy_balance_reward + temperature_reward + storage_reward + ev_reward
 
-    def step(actions: tuple[float, float, float],
-             temp_inside_t: float,
-             storage_soc_t: float,
-             ev_soc_t: float,
-             dt: int = 3600) -> tuple[float, float, float, float, bool]:
-        temp_setting, storage_charging_power, ev_charging_power = actions
+    def step(
+            actions: tuple[float, ...],
+            temp_inside_t: float,
+            storage_soc_t: float,
+            ev_soc_per_id_t: dict[int, float],
+            dt: int
+    ) -> tuple[float, float, float, dict, bool]:
+        temp_setting = actions[0]
+        storage_charging_power = actions[1]
+        ev_charging_power_list = actions[2:]
 
         delta_temp = temp_inside_t - temp_setting
         if abs(delta_temp) > temp_window:
@@ -217,26 +410,35 @@ def training_function(
         storage_consumption = real_delta_capacity / (
                 storage_power_reduction * storage_efficiency if storage_charging_power > 0 else 1.)
 
-        ev_driving_power = ev_driving_state["driving_power"]
-        if ev_driving_power == 0.:
-            ev_power_reduction = min(1.0, max(epsilon, (100. - ev_soc_t) / (100. - ev_charging_switch_level)))
-            delta_capacity = ev_charging_power * dt / 3600 * ev_efficiency * ev_power_reduction
-            next_ev_soc = ev_soc_t + delta_capacity / ev_max_capacity * 100.0
-            next_ev_soc = (1.0 - ev_energy_loss * dt / 100.0) * next_ev_soc
-            next_ev_soc = min(max(next_ev_soc, epsilon), 100.0)
-            real_delta_capacity = (next_ev_soc - ev_soc_t) / 100. * ev_max_capacity
-            ev_consumption = real_delta_capacity / (ev_power_reduction * ev_efficiency)
-        else:
-            next_ev_soc = ev_soc_t - ev_driving_power * dt / 3600 / ev_max_capacity * 100.0
-            next_ev_soc = max(next_ev_soc, epsilon)
-            ev_consumption = 0.
+        next_ev_soc_per_id = {}
+        for ev_id, ev_charging_power in zip(ev_id_list, ev_charging_power_list):
+            ev_driving_power = ev_driving_state_per_id[ev_id]["driving_power"]
+            ev_soc_t = ev_soc_per_id_t[ev_id]
+            ev_battery_parameters = ev_battery_parameters_per_id[ev_id]
+            ev_charging_switch_level = ev_battery_parameters["charging_switch_level"]
+            ev_efficiency = ev_battery_parameters["efficiency"]
+            ev_max_capacity = ev_battery_parameters["max_capacity"]
+            ev_energy_loss = ev_battery_parameters["energy_loss"]
+            if ev_driving_power == 0.:
+                ev_power_reduction = min(1.0, max(epsilon, (100. - ev_soc_t) / (100. - ev_charging_switch_level)))
+                delta_capacity = ev_charging_power * dt / 3600 * ev_efficiency * ev_power_reduction
+                next_ev_soc = ev_soc_t + delta_capacity / ev_max_capacity * 100.0
+                next_ev_soc = (1.0 - ev_energy_loss * dt / 100.0) * next_ev_soc
+                next_ev_soc = min(max(next_ev_soc, epsilon), 100.0)
+                real_delta_capacity = (next_ev_soc - ev_soc_t) / 100. * ev_max_capacity
+                ev_consumption = real_delta_capacity / (ev_power_reduction * ev_efficiency)
+            else:
+                next_ev_soc = ev_soc_t - ev_driving_power * dt / 3600 / ev_max_capacity * 100.0
+                next_ev_soc = max(next_ev_soc, epsilon)
+                ev_consumption = 0.
+            next_ev_soc_per_id[ev_id] = next_ev_soc
 
         controlled_consumption = heating_consumption + storage_consumption + ev_consumption
         reward_t = get_reward(
             controlled_consumption,
             next_temp_inside,
             next_storage_soc,
-            next_ev_soc,
+            next_ev_soc_per_id,
             dt
         )
 
@@ -244,7 +446,7 @@ def training_function(
             reward_t,
             next_temp_inside,
             next_storage_soc,
-            next_ev_soc,
+            next_ev_soc_per_id,
             next_is_heating_on,
         )
 
@@ -298,7 +500,10 @@ def training_function(
         def forward(self):
             raise NotImplementedError
 
-        def act(self, tensor_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        def act(
+                self,
+                tensor_state: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             action_mean = self.actor(tensor_state)
             cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
             dist = MultivariateNormal(action_mean, cov_mat)
@@ -309,10 +514,11 @@ def training_function(
             state_val = self.critic(tensor_state)
             return tensor_action.detach(), action_logprob.detach(), state_val.detach()
 
-        def evaluate(self,
-                     tensor_state: torch.Tensor,
-                     tensor_action: torch.Tensor) -> tuple[
-            torch.Tensor, torch.Tensor, torch.Tensor]:
+        def evaluate(
+                self,
+                tensor_state: torch.Tensor,
+                tensor_action: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             action_mean = self.actor(tensor_state)
             action_var = self.action_var.expand_as(action_mean)
             cov_mat = torch.diag_embed(action_var).to(device)
@@ -337,7 +543,8 @@ def training_function(
         tensor_action[0] = tensor_action[0] * (upper_bounds[0] - lower_bounds[0]) / 2 + (
                     upper_bounds[0] + lower_bounds[0]) / 2
         tensor_action[1] = tensor_action[1] * upper_bounds[1]
-        tensor_action[2] = (tensor_action[2] + 1) * upper_bounds[2] / 2
+        for i in range(len(ev_id_list)):
+            tensor_action[2 + i] = (tensor_action[2 + i] + 1) * upper_bounds[2 + i] / 2
         tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
@@ -384,9 +591,11 @@ def training_function(
         policy_old.load_state_dict(policy.state_dict())
         buffer.clear()
 
-    def advantage(rewards: torch.Tensor,
-                  done: list,
-                  values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def advantage(
+            rewards: torch.Tensor,
+            done: list,
+            values: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         advantages = torch.zeros(len(rewards), dtype=torch.float)
         last_advantage = 0
         last_value = values[-1]
@@ -413,8 +622,170 @@ def training_function(
 
         return new_action_std
 
+    def authenticate_to_besmart() -> str:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Auth': besmart_parameters['workspace_key'],
+        }
+        body = {
+            "login": besmart_parameters["login"],
+            "password": besmart_parameters["password"],
+        }
+        r = requests.post(
+            'https://api.besmart.energy/api/users/token',
+            headers=headers,
+            json=body
+        )
+        return r.json()["token"]
+
+    def get_data_from_besmart(
+            cid: int,
+            mid: int,
+            moid: int,
+            is_cumulative: bool = False
+    ) -> dict:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+        since = int(besmart_parameters["since"]) - cycle_timedelta_s
+        if is_cumulative:
+            since -= cycle_timedelta_s
+        body = [{
+            "client_cid": cid,
+            "sensor_mid": mid,
+            "signal_type_moid": moid,
+            "since": since * 1000,
+            "till": int(besmart_parameters["till"]) * 1000,
+            "get_last": True,
+        }]
+        res = requests.post(
+            'https://api.besmart.energy/api/sensors/signals/data',
+            headers=headers, json=body
+        )
+        return res.json()[0]['data']
+
+    def get_energy_data(
+            identifier: dict[str, int],
+            is_cumulative: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
+        data = get_data_from_besmart(identifier["cid"],
+                                     identifier["mid"],
+                                     identifier["moid"],
+                                     is_cumulative)
+        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
+        value = np.array(data['value'])
+        origin = np.array(data['origin'])
+
+        real_value = value[origin == 1]
+        real_time = time[origin == 1]
+        pred_value = value[origin == 2]
+        pred_time = time[origin == 2]
+
+        try:
+            real_value, real_time = validate_data(real_time, real_value, is_cumulative)
+            pred_value, pred_time = validate_data(pred_time, pred_value, is_cumulative)
+        except ValueError:
+            raise Exception('Not enough data for training')
+
+        if is_cumulative:
+            real_value = np.diff(real_value) / (np.diff(real_time.astype(int)) / 60)
+            pred_value = np.diff(pred_value) / (np.diff(pred_time.astype(int)) / 60)
+
+        return real_value, pred_value
+
+    def get_temperature_data() -> np.ndarray:
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+        sensor_identifier = besmart_parameters["energy_consumption"]
+        sensor = requests.get(
+            f'https://api.besmart.energy/api/sensors/{sensor_identifier["cid"]}.{sensor_identifier["mid"]}',
+            headers=headers,
+        ).json()
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Auth': besmart_parameters['workspace_key'],
+        }
+        params = {
+            "since": (int(besmart_parameters["since"]) - cycle_timedelta_s) * 1000,
+            "till": int(besmart_parameters["till"]) * 1000,
+            'delta_t': cycle_timedelta_s // 60,
+            'raw': False,
+            'get_last': True,
+        }
+        res = requests.get(
+            f'https://api.besmart.energy/api/weather/{sensor["lat"]}/{sensor["lon"]}/{besmart_parameters["temperature_moid"]}/data',
+            headers=headers, params=params
+        )
+        data = res.json()['data']
+
+        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
+        value = np.array(data['value'])
+        origin = np.array(data['origin'])
+        estm_value = value[origin == 3]
+        estm_time = time[origin == 3]
+        try:
+            pred_value, _ = validate_data(estm_time, estm_value)
+        except ValueError:
+            raise Exception('Not enough data for training')
+
+        return pred_value - 272.15
+
+    def validate_data(
+            time: np.ndarray,
+            value: np.ndarray,
+            is_cumulative: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
+        since = np.datetime64(int(besmart_parameters["since"]), "s")
+        if is_cumulative:
+            since -= np.timedelta64(cycle_timedelta_s, 's')
+        expected_time = np.arange(since,
+                                  np.datetime64(int(besmart_parameters["till"]), "s"),
+                                  np.timedelta64(cycle_timedelta_s, 's')).astype('datetime64[m]')
+        missing_time = np.array([t for t in expected_time if t not in time])
+        num_missing = len(missing_time)
+        if num_missing > 0:
+            new_time = np.concatenate((time, missing_time))
+            new_value = np.concatenate((value, np.array(len(missing_time) * [np.nan])))
+            ind = np.argsort(new_time)
+            new_time = new_time[ind]
+            new_value = new_value[ind]
+            missing_data_mask = np.isnan(new_value)
+            sequences_last_indexes = np.append(np.where(missing_data_mask[1:] != missing_data_mask[:-1]),
+                                               len(missing_data_mask) - 1)
+            sequences_lengths = np.diff(np.append(-1, sequences_last_indexes))
+            gap_lengths = sequences_lengths[missing_data_mask[sequences_last_indexes]]
+            if np.any(gap_lengths > 2):
+                raise ValueError
+            new_value = np.interp(new_time.astype('float64'),
+                                  new_time[~missing_data_mask].astype('float64'),
+                                  new_value[~missing_data_mask])
+        else:
+            new_value = value.copy()
+            new_time = time.copy()
+        if len(new_time) > len(expected_time):
+            new_value = np.array([v for t, v in zip(new_time, new_value) if t in expected_time])
+
+        return new_value, expected_time
+
+
     epsilon = 1e-8
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_parameters = json.loads(train_parameters)
+    s3_parameters = json.loads(s3_parameters)
+    besmart_parameters = json.loads(besmart_parameters)
+    home_model_parameters = json.loads(home_model_parameters)
+    storage_parameters = json.loads(storage_parameters)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    heating_parameters = json.loads(heating_parameters)
+    user_preferences = json.loads(user_preferences)
 
     number_of_episodes = train_parameters["num_episodes"]
     lr_critic = train_parameters["critic_lr"]
@@ -437,11 +808,9 @@ def training_function(
     heating_coefficient = home_model_parameters["heating_coefficient"]
     heat_loss_coefficient = home_model_parameters["heat_loss_coefficient"]
     heat_capacity = home_model_parameters["heat_capacity"]
-    temp_window = home_model_parameters["heating_delta_temperature"]
+    temp_window = home_model_parameters["temp_window"]
     min_temp_setting = home_model_parameters["min_temp_setting"]
     max_temp_setting = home_model_parameters["max_temp_setting"]
-    ev_driving_schedule = home_model_parameters["ev_driving_schedule"]
-    pref_temp_schedule = home_model_parameters["pref_temp_schedule"]
 
     heating_devices_power = sum(heating_parameters["powers_of_heating_devices"])
 
@@ -452,17 +821,22 @@ def training_function(
     storage_energy_loss = storage_parameters["energy_loss"]
     storage_nominal_power = storage_parameters["nominal_power"]
 
-    ev_max_capacity = ev_battery_parameters["max_capacity"]
-    ev_min_charge_level = ev_battery_parameters["min_charge_level"]
-    ev_driving_charge_level = ev_battery_parameters["driving_charge_level"]
-    ev_charging_switch_level = ev_battery_parameters["charging_switch_level"]
-    ev_efficiency = ev_battery_parameters["efficiency"]
-    ev_energy_loss = ev_battery_parameters["energy_loss"]
-    ev_nominal_power = ev_battery_parameters["nominal_power"]
+    ev_driving_schedule_per_id = user_preferences["ev_driving_schedule"]
+    pref_temp_schedule = user_preferences["pref_temp_schedule"]
+    pref_temp_schedule_time = np.array([datetime.datetime.strptime(t, "%H:%M").time()
+                                        for t in pref_temp_schedule["time"]])
+    cycle_timedelta_s = user_preferences["cycle_timedelta_s"]
 
-    lower_bounds = [min_temp_setting, - storage_nominal_power, 0.]
-    upper_bounds = [max_temp_setting, storage_nominal_power, ev_nominal_power]
-    state_dim = 11
+    ev_id_list = list(ev_battery_parameters_per_id.keys())
+    ev_id_list.sort()
+    for ev_driving_schedule_dict in ev_driving_schedule_per_id.values():
+        ev_driving_schedule_dict["time"] = np.array([datetime.datetime.strptime(t, "%H:%M").time()
+                                                     for t in ev_driving_schedule_dict["time"]])
+
+    lower_bounds = [min_temp_setting, - storage_nominal_power] + len(ev_id_list) * [0.]
+    upper_bounds = [max_temp_setting, storage_nominal_power] + [
+        ev_battery_parameters_per_id[ev_id]["nominal_power"] for ev_id in ev_id_list]
+    state_dim = 8 + 3 * len(ev_id_list)
     action_dim = len(lower_bounds)
 
     policy = ActorCritic()
@@ -475,46 +849,67 @@ def training_function(
     ])
     action_std = action_std_init
 
+    timestamps = np.arange(np.datetime64(int(besmart_parameters["since"]), "s"),
+                           np.datetime64(int(besmart_parameters["till"]), "s"),
+                           datetime.timedelta(seconds=cycle_timedelta_s))
+
+    token = authenticate_to_besmart()
+    pv_generation_real, pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
+    energy_consumption_real, energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
+    temp_outside_pred = get_temperature_data()
+
+    pv_generation_max = np.max(pv_generation_pred)
+    energy_consumption_max = np.max(energy_consumption_pred)
+    temp_outside_min = np.min(temp_outside_pred)
+    temp_outside_max = np.max(temp_outside_pred)
+
     ep_reward_list = []
-    max_train_index = len(timestamps_hour) - 25
+    number_of_cycles = datetime.timedelta(days=1) // datetime.timedelta(seconds=cycle_timedelta_s)
+    max_train_index = len(timestamps) - 25
     train_indexes = np.random.randint(max_train_index, size=(max_train_index,))
     for ep in range(number_of_episodes):
-        episode_start_index = train_indexes[ep % len(train_indexes)]  # np.random.randint(max_train_index)
-        episode_start_hour = timestamps_hour[episode_start_index]
+        episode_start_index = train_indexes[ep % len(train_indexes)]
+        episode_end_index = episode_start_index + number_of_cycles + 1
 
-        pv_generation_list = pv_generation_train[episode_start_index: episode_start_index + 25]
-        pv_generation_pred_list = pv_generation_pred_train[episode_start_index: episode_start_index + 25]
-        uncontrolled_consumption_list = uncontrolled_consumption_train[episode_start_index: episode_start_index + 25]
-        uncontrolled_consumption_pred_list = uncontrolled_consumption_pred_train[
-                                             episode_start_index: episode_start_index + 25]
-        temp_outside_list = temp_outside_train[episode_start_index: episode_start_index + 25]
-        temp_outside_pred_list = temp_outside_pred_train[episode_start_index: episode_start_index + 25]
+        timestamps_list = timestamps[episode_start_index:episode_end_index]
+        pv_generation_real_list = pv_generation_real[episode_start_index:episode_end_index]
+        pv_generation_pred_list = pv_generation_pred[episode_start_index:episode_end_index]
+        energy_consumption_real_list = energy_consumption_real[episode_start_index:episode_end_index]
+        energy_consumption_pred_list = energy_consumption_pred[episode_start_index:episode_end_index]
+        temp_outside_list = temp_outside_pred[episode_start_index:episode_end_index]
 
-        hour = episode_start_hour % 24
+        ts = (timestamps_list[0] - np.datetime64('1970-01-01T00:00:00')) / np.timedelta64(1, 's')
+        time = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).time()
         pref_temperature = get_preferred_temperature()
         temp_inside = pref_temperature + np.random.uniform(- temp_window, temp_window)
         storage_soc = np.random.uniform(storage_min_charge_level, 100.)
-        ev_soc = np.random.uniform(ev_min_charge_level, 100.)
+        ev_soc_per_id = {
+            ev_id: np.random.uniform(ev_battery_parameters["min_charge_level"], 100.)
+            for ev_id, ev_battery_parameters in ev_battery_parameters_per_id.items()
+        }
         is_heating_on = bool(np.random.randint(2))
 
         episodic_reward = 0
-        for h in range(24):
-            hour = (episode_start_hour + h) % 24
-            ev_driving_state = get_ev_driving_state()
+        for i_cycle in range(number_of_cycles):
+            ts = (timestamps_list[i_cycle] - np.datetime64('1970-01-01T00:00:00')) / np.timedelta64(1, 's')
+            time = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).time()
+            ev_driving_state_per_id = {
+                ev_id: get_ev_driving_state(ev_driving_schedule_per_id[ev_id]) for ev_id in ev_id_list
+            }
             pref_temperature = get_preferred_temperature()
-            state = get_state(index=h)
+            state = get_state(index=i_cycle)
             action = select_action(torch.tensor(state, dtype=torch.float).unsqueeze(0))
 
-            pv_generation = pv_generation_list[h]
-            uncontrolled_consumption = uncontrolled_consumption_list[h]
-            temp_outside = temp_outside_list[h]
+            pv_generation = pv_generation_real_list[i_cycle]
+            energy_consumption = energy_consumption_real_list[i_cycle]
+            temp_outside = temp_outside_list[i_cycle]
 
             # Receive state and reward from environment.
-            reward, temp_inside, storage_soc, ev_soc, is_heating_on = step(
-                action, temp_inside, storage_soc, ev_soc, cycle_timedelta_s
+            reward, temp_inside, storage_soc, ev_soc_per_id, is_heating_on = step(
+                action, temp_inside, storage_soc, ev_soc_per_id, cycle_timedelta_s
             )
             buffer.rewards.append(reward)
-            if h == 23:
+            if i_cycle == number_of_cycles - 1:
                 buffer.is_terminals.append(1)
             else:
                 buffer.is_terminals.append(0)
@@ -526,8 +921,42 @@ def training_function(
             update()
 
         ep_reward_list.append(episodic_reward)
-
         avg_reward = np.mean(ep_reward_list[-100:])
         logging.debug(f"Episode * {ep} * Avg Reward is ==> {avg_reward} " + f"* Std {action_std}")
 
-    return policy_old
+    example_state = get_state(index=0)
+    example_inputs = (torch.FloatTensor(torch.tensor(example_state, dtype=torch.float).unsqueeze(0).to(device)), )
+    tmp_stream = BytesIO()
+    torch.onnx.export(
+        policy_old.actor,
+        example_inputs,
+        tmp_stream,
+        export_params=True,
+        opset_version=10,
+        do_constant_folding=True,
+        input_names = ['input'],
+        output_names = ['output'],
+        dynamic_axes={'input' : {0 : 'batch_size'},
+                      'output' : {0 : 'batch_size'}}
+    )
+    tmp_stream.seek(0)
+
+    s3 = boto3.resource(
+        "s3",
+        endpoint_url=s3_parameters["endpoint_url"],
+        aws_access_key_id=s3_parameters["access_key_id"],
+        aws_secret_access_key=s3_parameters["secret_access_key"],
+    )
+    bucket = s3.Bucket(s3_parameters["bucket_name"])
+    bucket.put_object(Key=s3_parameters["model_filename"], Body=tmp_stream.getvalue())
+
+    state_range = {
+        "energy_consumption": [0.0, energy_consumption_max],
+        "pv_generation": [0.0, pv_generation_max],
+        "temperature": [temp_outside_min, temp_outside_max],
+    }
+
+    if train_parameters.get("debug_mode", False):
+        return json.dumps(state_range), ep_reward_list
+    else:
+        return json.dumps(state_range)

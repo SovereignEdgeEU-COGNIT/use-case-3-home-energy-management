@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "home-energy-management"
-version = "1.0.0"
+version = "2.1.0"
 description = "Home energy management: decision algorithm and end devices simulators"
 requires-python = ">=3.10"
 dependencies = [

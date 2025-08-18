@@ -7,8 +7,8 @@ from phoenixsystems.sem.device import (
     InfoForDevice,
     METERSIM_NO_UPDATE_SCHEDULED,
 )
-from home_energy_management.device_simulators.device_utils import complex_dot_product, DeviceUserApi
-from home_energy_management.device_simulators.simple_device import ScheduledDevice
+from home_energy_management.device_simulators.device_utils import complex_dot_product, DeviceUserApi, make_current
+from home_energy_management.device_simulators.simple_device import ScheduledDataDevice
 
 
 class AbstractPV(Device, DeviceUserApi, ABC):
@@ -58,16 +58,18 @@ class AbstractPV(Device, DeviceUserApi, ABC):
         return DeviceResponse(self.current, self.next_update_time)
 
 
-class ScheduledPV(AbstractPV, ScheduledDevice):
-    def __init__(self,
-                 config,
-                 loop: int = 0) -> None:
+class ScheduledPV(AbstractPV, ScheduledDataDevice):
+    def __init__(
+            self,
+            update_time: list[int],
+            data: list[Any]
+    ) -> None:
         AbstractPV.__init__(self)
-        ScheduledDevice.__init__(self, config, loop)
+        ScheduledDataDevice.__init__(self, update_time, data)
 
     def update_state(self, now: int) -> None:
-        current, next_update_time = self.get_state(now)
-        self.current = [complex(x) for x in current]
+        power, next_update_time = self.get_state(now)
+        self.current = make_current([power / 230., 0, 0])
         self.next_update_time = next_update_time
 
 
