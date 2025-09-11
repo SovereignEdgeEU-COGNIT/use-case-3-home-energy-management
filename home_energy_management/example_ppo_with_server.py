@@ -16,8 +16,8 @@ run_locally = False
 REQS_INIT = {
     "FLAVOUR": "EnergyTorch",
     "GEOLOCATION": {
-        "latitude": 43.05,
-        "longitude": -2.53,
+        "latitude": 59.3294,
+        "longitude": 18.0687,
     },
 }
 
@@ -34,7 +34,7 @@ EV_REWARD_COEFFICIENT = .8
 data_directory = 'data/'
 model_filename = 'model_scripted_from_cognit.pt'
 
-number_of_episodes = 1000  # TODO 8-10k after timeout fix
+number_of_episodes = 8000
 # Learning rate for actor-critic models
 critic_lr = 0.001
 actor_lr = 0.001
