@@ -16,8 +16,8 @@ run_locally = False
 REQS_INIT = {
     "FLAVOUR": "EnergyTorch",
     "GEOLOCATION": {
-        "latitude": 43.05,
-        "longitude": -2.53,
+        "latitude": 59.3294,
+        "longitude": 18.0687,
     },
 }
 
@@ -34,7 +34,7 @@ EV_REWARD_COEFFICIENT = .8
 data_directory = 'data/'
 model_filename = 'model_scripted_from_cognit.pt'
 
-number_of_episodes = 1000  # TODO 8-10k after timeout fix
+number_of_episodes = 8000
 # Learning rate for actor-critic models
 critic_lr = 0.001
 actor_lr = 0.001
@@ -80,14 +80,6 @@ home_model_parameters = {
 }
 user_preferences = {
     "ev_driving_schedule": {
-        0: {
-            "time": ["0:00", "8:00", "15:00", "20:00", "22:00"],
-            "driving_power": [0., 5., 0., 8., 0.],
-        },
-        1: {
-            "time": ["0:00", "7:00", "9:00", "14:00", "16:00", "18:00", "19:00"],
-            "driving_power": [0., 4., 0., 4., 0., 6., 0.],
-        }
     },
     "pref_temp_schedule": {
         "time": ["0:00", "7:00", "9:00", "17:00", "23:00"],
@@ -103,26 +95,7 @@ storage_parameters = {
     "efficiency": 0.85,
     "energy_loss": 0.
 }
-ev_battery_parameters = {
-    0: {
-        "nominal_power": 6.9,  # (kW)
-        "max_capacity": 40.0,  # (kWh)
-        "min_charge_level": 10.0,  # (%)
-        "driving_charge_level": 80.0,  # (%)
-        "charging_switch_level": 75.0,  # (%)
-        "efficiency": 0.85,
-        "energy_loss": 0.
-    },
-    1: {
-        "nominal_power": 5.5,  # (kW)
-        "max_capacity": 32.0,  # (kWh)
-        "min_charge_level": 10.0,  # (%)
-        "driving_charge_level": 90.0,  # (%)
-        "charging_switch_level": 75.0,  # (%)
-        "efficiency": 0.85,
-        "energy_loss": 0.
-    },
-}
+ev_battery_parameters = None
 heating_parameters = {
     "preferred_temp": 21.0,  # (°C)
     "powers_of_heating_devices": [8.0, 8.0],  # (kW)
@@ -169,12 +142,12 @@ logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - star
 
 
 storage_parameters["curr_charge_level"] = 50.0  # (%)
-ev_battery_parameters[0]["curr_charge_level"] = 50.0  # (%)
-ev_battery_parameters[0]["is_available"] = True
-ev_battery_parameters[0]["time_until_charged"] = 3 * 3600  # (s)
-ev_battery_parameters[1]["curr_charge_level"] = 60.0  # (%)
-ev_battery_parameters[1]["is_available"] = True
-ev_battery_parameters[1]["time_until_charged"] = 2 * 3600  # (s)
+# ev_battery_parameters[0]["curr_charge_level"] = 50.0  # (%)
+# ev_battery_parameters[0]["is_available"] = True
+# ev_battery_parameters[0]["time_until_charged"] = 3 * 3600  # (s)
+# ev_battery_parameters[1]["curr_charge_level"] = 60.0  # (%)
+# ev_battery_parameters[1]["is_available"] = True
+# ev_battery_parameters[1]["time_until_charged"] = 2 * 3600  # (s)
 heating_parameters["curr_temp"] = 19.0  # (°C)
 home_model_parameters["state_range"] = json.loads(result.res[0])
 

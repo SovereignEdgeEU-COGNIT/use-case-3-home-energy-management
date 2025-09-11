@@ -7,7 +7,7 @@ def make_decision(
         ev_battery_parameters_per_id: str,
         heating_parameters: str,
         user_preferences: str,
-) -> tuple[float, str, str]:
+) -> tuple[float, str, str, str]:
     import datetime
     import json
     from io import BytesIO
@@ -154,7 +154,8 @@ def make_decision(
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
-    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id) if (
+            ev_battery_parameters_per_id != json.dumps(None)) else {}
     heating_parameters = json.loads(heating_parameters)
     user_preferences = json.loads(user_preferences)
 
@@ -259,7 +260,7 @@ def make_decision(
     return (
         temp_setting,
         json.dumps(storage_params),
-        json.dumps(ev_params_per_id),
+        json.dumps(ev_params_per_id)
     )
 
 
@@ -411,6 +412,7 @@ def training_function(
                 storage_power_reduction * storage_efficiency if storage_charging_power > 0 else 1.)
 
         next_ev_soc_per_id = {}
+        ev_consumption = 0.
         for ev_id, ev_charging_power in zip(ev_id_list, ev_charging_power_list):
             ev_driving_power = ev_driving_state_per_id[ev_id]["driving_power"]
             ev_soc_t = ev_soc_per_id_t[ev_id]
@@ -783,7 +785,8 @@ def training_function(
     besmart_parameters = json.loads(besmart_parameters)
     home_model_parameters = json.loads(home_model_parameters)
     storage_parameters = json.loads(storage_parameters)
-    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id)
+    ev_battery_parameters_per_id = json.loads(ev_battery_parameters_per_id) if (
+            ev_battery_parameters_per_id != json.dumps(None)) else {}
     heating_parameters = json.loads(heating_parameters)
     user_preferences = json.loads(user_preferences)
 

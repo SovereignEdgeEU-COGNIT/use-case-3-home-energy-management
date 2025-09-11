@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO)
 REQS_INIT = {
     "FLAVOUR": "Energy",
     "GEOLOCATION": {
-        "latitude": 43.05,
-        "longitude": -2.53,
+        "latitude": 59.3294,
+        "longitude": 18.0687,
     },
 }
 
