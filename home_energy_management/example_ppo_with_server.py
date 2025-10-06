@@ -6,7 +6,7 @@ import time
 from cognit import device_runtime
 
 from access_config import S3_PARAMETERS, BESMART_PARAMETERS
-from ppo_algorithm import make_decision, training_function
+from ppo_algorithm import make_decision, train, evaluate
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,6 +15,8 @@ run_locally = False
 
 REQS_INIT = {
     "FLAVOUR": "EnergyTorch",
+    "MIN_ENERGY_RENEWABLE_USAGE": 85,
+    "MAX_FUNCTION_EXECUTION_TIME": 3.5,
     "GEOLOCATION": {
         "latitude": 59.3294,
         "longitude": 18.0687,
@@ -27,7 +29,7 @@ runtime.init(REQS_INIT)
 logging.info("COGNIT Serverless Runtime ready!")
 
 ENERGY_REWARD_COEFFICIENT = .3
-TEMP_REWARD_COEFFICIENT = 2.
+TEMP_REWARD_COEFFICIENT = 3.
 STORAGE_REWARD_COEFFICIENT = .8
 EV_REWARD_COEFFICIENT = .8
 
@@ -67,7 +69,6 @@ train_parameters = {
     "temp_reward_coeff": TEMP_REWARD_COEFFICIENT,
     "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
     "ev_reward_coeff": EV_REWARD_COEFFICIENT,
-    "debug_mode": True,
 }
 
 home_model_parameters = {
@@ -134,7 +135,7 @@ BESMART_PARAMETERS["since"] = (BESMART_PARAMETERS["till"]
 if run_locally:
     logging.info(" --> Local run training")
     start_time = time.perf_counter()
-    result = training_function(
+    result = train(
         train_parameters=json.dumps(train_parameters),
         s3_parameters=json.dumps(S3_PARAMETERS),
         besmart_parameters=json.dumps(BESMART_PARAMETERS),
@@ -148,11 +149,27 @@ if run_locally:
     logging.info(f"Func result: {result = }")
     logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
 
+    logging.info(" --> Local run evaluation")
+    start_time = time.perf_counter()
+    result = evaluate(
+        eval_parameters=json.dumps(train_parameters),
+        s3_parameters=json.dumps(S3_PARAMETERS),
+        besmart_parameters=json.dumps(BESMART_PARAMETERS),
+        home_model_parameters=json.dumps(home_model_parameters),
+        storage_parameters=json.dumps(storage_parameters),
+        ev_battery_parameters_per_id=json.dumps(ev_battery_parameters),
+        heating_parameters=json.dumps(heating_parameters),
+        user_preferences=json.dumps(user_preferences),
+    )
+    end_time = time.perf_counter()
+    logging.info(f"Func result: {result = }")
+    logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
+
 
 logging.info(" --> COGNIT run training")
 start_time = time.perf_counter()
-result = runtime.call(
-    training_function,
+train_result = runtime.call(
+    train,
     json.dumps(train_parameters),
     json.dumps(S3_PARAMETERS),
     json.dumps(BESMART_PARAMETERS),
@@ -163,9 +180,25 @@ result = runtime.call(
     json.dumps(user_preferences),
 )
 end_time = time.perf_counter()
-
-logging.info(f"Func result: {result.res}")
+logging.info(f"Func result: {train_result.res}")
 logging.info(f"Execution time ({number_of_episodes} episodes): {(end_time - start_time):.6f} seconds")
+
+logging.info(" --> COGNIT run evaluation")
+start_time = time.perf_counter()
+eval_result = runtime.call(
+    evaluate,
+    json.dumps(train_parameters),
+    json.dumps(S3_PARAMETERS),
+    json.dumps(BESMART_PARAMETERS),
+    json.dumps(home_model_parameters),
+    json.dumps(storage_parameters),
+    json.dumps(ev_battery_parameters),
+    json.dumps(heating_parameters),
+    json.dumps(user_preferences),
+)
+end_time = time.perf_counter()
+logging.info(f"Func result: {eval_result.res}")
+logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
 
 storage_parameters["curr_charge_level"] = 50.0  # (%)
@@ -176,7 +209,6 @@ ev_battery_parameters[1]["curr_charge_level"] = 60.0  # (%)
 ev_battery_parameters[1]["is_available"] = True
 ev_battery_parameters[1]["time_until_charged"] = 2 * 3600  # (s)
 heating_parameters["curr_temp"] = 19.0  # (°C)
-home_model_parameters["state_range"] = json.loads(result.res[0])
 
 
 if run_locally:
@@ -195,7 +227,7 @@ if run_locally:
     end_time = time.perf_counter()
     logging.info(f"Func result 1: {action = }")
     logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
-    
+
     logging.info(" --> Local run predict 2")
     start_time = time.perf_counter()
     action = make_decision(
@@ -227,7 +259,6 @@ result = runtime.call(
     json.dumps(user_preferences),
 )
 end_time = time.perf_counter()
-
 logging.info(f"Func result 1: {result.res}")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
 
@@ -245,6 +276,5 @@ result = runtime.call(
     json.dumps(user_preferences),
 )
 end_time = time.perf_counter()
-
 logging.info(f"Func result 2: {result.res}")
 logging.info(f"Execution time: {(end_time - start_time):.6f} seconds")
