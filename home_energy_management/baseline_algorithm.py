@@ -998,7 +998,7 @@ def evaluate(
     energy_balance_array = np.array(energy_balance_list).reshape(number_of_cycles, -1)
     return json.dumps(
         {
-            'mean_reward': np.mean(np.sum(reward_array, axis=0)),
-            'mean_energy_balance': np.mean(np.sum(energy_balance_array, axis=0)),
+            'mean_reward': float(np.mean(np.sum(reward_array, axis=0))),
+            'mean_energy_balance': float(np.mean(np.sum(energy_balance_array, axis=0))),
         }
     )

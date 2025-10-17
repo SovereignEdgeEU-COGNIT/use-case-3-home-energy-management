@@ -69,6 +69,7 @@ train_parameters = {
     "temp_reward_coeff": TEMP_REWARD_COEFFICIENT,
     "storage_reward_coeff": STORAGE_REWARD_COEFFICIENT,
     "ev_reward_coeff": EV_REWARD_COEFFICIENT,
+    "return_metrics": True
 }
 
 home_model_parameters = {
@@ -178,6 +179,7 @@ train_result = runtime.call(
     json.dumps(ev_battery_parameters),
     json.dumps(heating_parameters),
     json.dumps(user_preferences),
+    timeout=600,
 )
 end_time = time.perf_counter()
 logging.info(f"Func result: {train_result.res}")

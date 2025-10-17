@@ -1467,12 +1467,14 @@ def evaluate(
     reward_array = np.array(reward_list).reshape(number_of_cycles, -1)
     energy_balance_array = np.array(energy_balance_list).reshape(number_of_cycles, -1)
 
+    is_valid = np.mean(np.sum(reward_array, axis=0)) > eval_parameters.get("mean_reward_threshold", 0.0)
     if eval_parameters.get("return_metrics", False):
         return json.dumps(
             {
-                'mean_reward': np.mean(np.sum(reward_array, axis=0)),
-                'mean_energy_balance': np.mean(np.sum(energy_balance_array, axis=0)),
+                "is_valid": bool(is_valid),
+                "mean_reward": float(np.mean(np.sum(reward_array, axis=0))),
+                "mean_energy_balance": float(np.mean(np.sum(energy_balance_array, axis=0))),
             }
         )
     else:
-        return np.mean(np.sum(reward_array, axis=0)) > eval_parameters.get("mean_reward_threshold", 0.0)
+        return is_valid
