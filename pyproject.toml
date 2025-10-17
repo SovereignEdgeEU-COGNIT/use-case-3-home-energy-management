@@ -12,14 +12,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "home-energy-management"
-version = "2.1.1"
+version = "2.2.0"
 description = "Home energy management: decision algorithm and end devices simulators"
 requires-python = ">=3.10"
-dependencies = [
-  "phoenixsystems-sem >= 1.0.0"
-]
+dynamic = ["dependencies"]
 readme = "README.md"
 license = {file = "LICENSE"}
-classifiers = [
-  "Programming Language :: Python"
-]
+classifiers = ["Programming Language :: Python"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
