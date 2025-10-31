@@ -20,8 +20,7 @@ def make_decision(
             dict with values for keys: workspace_key, login, password, pv_generation, energy_consumption,
             temperature_moid.
         home_model_parameters (str): JSON with parameters defining the home energy management model; dict with values
-            for keys: temp_window, heating_coefficient, heat_loss_coefficient, heat_capacity,
-            delta_charging_power_perc.
+            for keys: temp_window, heating_coefficient, heat_loss_coefficient, heat_capacity.
         storage_parameters (str): JSON with parameters defining the energy storage model; dict with values for keys:
             max_capacity, min_charge_level, efficiency, nominal_power, curr_charge_level.
         ev_battery_parameters_per_id (str): JSON with parameters defining per EV battery model; dict of dicts with
@@ -158,7 +157,7 @@ def make_decision(
             heating_params: dict,
             reduction_of_allowed_temp: float = 0.0,
             available_energy: float | None = None,
-    ) -> tuple[float, dict[str, float]]:
+    ) -> tuple[float, float]:
         energy_for_heating = 0.0  # kWh
         current_temp = heating_params["curr_temp"]
         conf_temp = current_temp
@@ -168,9 +167,10 @@ def make_decision(
         if temp_diff > 0:
             energy_for_heating = (sum(heating_params["powers_of_heating_devices"])
                                        * cycle_timedelta_s / 3600)  # kWh
-            if available_energy and energy_for_heating < available_energy:
-                available_energy -= energy_for_heating
-            conf_temp += 2 * temp_diff
+            if available_energy is None or energy_for_heating < available_energy:
+                conf_temp += 2 * temp_diff
+            else:
+                energy_for_heating = 0.0
 
         return energy_for_heating, conf_temp
 
@@ -231,7 +231,6 @@ def make_decision(
     temp_window = home_model_parameters["temp_window"]
     heat_loss_coeff = home_model_parameters["heat_loss_coefficient"]
     heat_capacity = home_model_parameters["heat_capacity"]
-    delta_charging_power_perc = home_model_parameters["delta_charging_power_perc"]
 
     charge_level_of_storage = storage_parameters["curr_charge_level"]
     storage_max_capacity = storage_parameters["max_capacity"]
@@ -358,8 +357,7 @@ def make_decision(
             ev_battery_nominal_power = ev_battery_parameters_per_id[ev_id]["nominal_power"]
             ev_battery_configuration["StorCtl_Mod"] = 1
             ev_battery_configuration["InWRte"] = min(
-                round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0
-                      + delta_charging_power_perc, 2),
+                round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0, 2),
                 100.0,
             )
         else:
@@ -374,16 +372,14 @@ def make_decision(
         energy_storage_configuration["StorCtl_Mod"] = 1
         energy_to_charge_storage = (energy_in_storage - initial_energy_in_storage) / storage_efficiency
         energy_storage_configuration["InWRte"] = min(
-            round(energy_to_charge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0
-                  + delta_charging_power_perc, 2),
+            round(energy_to_charge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0, 2),
             100.0,
         )
     else:
         energy_storage_configuration["StorCtl_Mod"] = 2
         energy_to_discharge_storage = initial_energy_in_storage - energy_in_storage
         energy_storage_configuration["OutWRte"] = min(
-            round(energy_to_discharge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0
-                  + delta_charging_power_perc, 2),
+            round(energy_to_discharge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0, 2),
             100.0,
         )
 
@@ -527,8 +523,7 @@ def evaluate(
             if energy_for_ev_charging > 0.0:
                 ev_battery_nominal_power = ev_battery_parameters_per_id[ev_id]["nominal_power"]
                 ev_charging_power = min(
-                    round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0
-                          + delta_charging_power_perc, 2),
+                    round(energy_for_ev_charging / (cycle_timedelta_s / 3600) / ev_battery_nominal_power * 100.0, 2),
                     100.0,
                 ) / 1000. * ev_battery_nominal_power
                 ev_charging_power_per_id.append(ev_charging_power)
@@ -541,15 +536,13 @@ def evaluate(
         if energy_in_storage > initial_energy_in_storage:
             energy_to_charge_storage = (energy_in_storage - initial_energy_in_storage) / storage_efficiency
             storage_charging_power = min(
-                round(energy_to_charge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0
-                      + delta_charging_power_perc, 2),
+                round(energy_to_charge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0, 2),
                 100.0,
             ) / 100. * storage_nominal_power
         else:
             energy_to_discharge_storage = initial_energy_in_storage - energy_in_storage
             storage_charging_power = - min(
-                round(energy_to_discharge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0
-                      + delta_charging_power_perc, 2),
+                round(energy_to_discharge_storage / (cycle_timedelta_s / 3600) / storage_nominal_power * 100.0, 2),
                 100.0,
             ) / 100. * storage_nominal_power
 
@@ -563,7 +556,7 @@ def evaluate(
             heating_params: dict,
             reduction_of_allowed_temp: float = 0.0,
             available_energy: float | None = None,
-    ) -> tuple[float, dict[str, float]]:
+    ) -> tuple[float, float]:
         energy_for_heating = 0.0  # kWh
         conf_temp = temp_inside
         temp_without_heating = (temp_inside - (temp_inside - temp_outside)
@@ -572,9 +565,10 @@ def evaluate(
         if temp_diff > 0:
             energy_for_heating = (sum(heating_params["powers_of_heating_devices"])
                                        * cycle_timedelta_s / 3600)  # kWh
-            if available_energy and energy_for_heating < available_energy:
-                available_energy -= energy_for_heating
-            conf_temp += 2 * temp_diff
+            if available_energy is None or energy_for_heating < available_energy:
+                conf_temp += 2 * temp_diff
+            else:
+                energy_for_heating = 0.0
 
         return energy_for_heating, conf_temp
 
@@ -923,7 +917,6 @@ def evaluate(
     heat_loss_coefficient = home_model_parameters["heat_loss_coefficient"]
     heat_capacity = home_model_parameters["heat_capacity"]
     temp_window = home_model_parameters["temp_window"]
-    delta_charging_power_perc = home_model_parameters["delta_charging_power_perc"]
 
     heating_devices_power = sum(heating_parameters["powers_of_heating_devices"])
 
@@ -955,9 +948,9 @@ def evaluate(
     energy_consumption_real, energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
     temp_outside_pred = get_temperature_data()
 
-    storage_soc = np.random.uniform(storage_min_charge_level, 100.)
+    storage_soc = round(np.random.uniform(storage_min_charge_level, 100.), 2)
     ev_soc_per_id = {
-        ev_id: np.random.uniform(ev_battery_parameters["min_charge_level"], 100.)
+        ev_id: round(np.random.uniform(ev_battery_parameters["min_charge_level"], 100.), 2)
         for ev_id, ev_battery_parameters in ev_battery_parameters_per_id.items()
     }
     is_heating_on = bool(np.random.randint(2))
@@ -977,7 +970,7 @@ def evaluate(
         temp_outside = temp_outside_pred[i]
         pref_temperature = get_preferred_temperature()
         if i == 0:
-            temp_inside = pref_temperature + np.random.uniform(- temp_window, temp_window)
+            temp_inside = pref_temperature + round(np.random.uniform(- temp_window, temp_window), 2)
         ev_driving_state_per_id = {
             ev_id: get_ev_driving_state(ev_driving_schedule_per_id[ev_id]) for ev_id in ev_id_list
         }
