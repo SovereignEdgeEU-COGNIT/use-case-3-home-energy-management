@@ -11,10 +11,14 @@ from baseline_algorithm import make_decision, evaluate
 logging.basicConfig(level=logging.INFO)
 
 REQS_INIT = {
+    "ID": "test_baseline",
     "FLAVOUR": "Energy",
+    "MIN_ENERGY_RENEWABLE_USAGE": 75,
+    "MAX_LATENCY": 45,
+    "MAX_FUNCTION_EXECUTION_TIME": 15.0,
     "GEOLOCATION": {
-        "latitude": 59.3294,
-        "longitude": 18.0687,
+        "latitude": 52.19,
+        "longitude": 21.05,
     },
 }
 

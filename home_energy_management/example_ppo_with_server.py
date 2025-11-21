@@ -14,12 +14,14 @@ timestamp = datetime.datetime.fromisoformat('2023-06-16 05:00:00')
 run_locally = False
 
 REQS_INIT = {
+    "ID": "test_ai",
     "FLAVOUR": "EnergyTorch",
-    "MIN_ENERGY_RENEWABLE_USAGE": 85,
-    "MAX_FUNCTION_EXECUTION_TIME": 3.5,
+    "MIN_ENERGY_RENEWABLE_USAGE": 75,
+    "MAX_LATENCY": 600,
+    "MAX_FUNCTION_EXECUTION_TIME": 15.0,
     "GEOLOCATION": {
-        "latitude": 59.3294,
-        "longitude": 18.0687,
+        "latitude": 52.19,
+        "longitude": 21.05,
     },
 }
 
