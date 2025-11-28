@@ -7,24 +7,6 @@ from home_energy_management.device_simulators.photovoltaic import ScheduledPV
 from home_energy_management.device_simulators.simple_device import ScheduledDataDevice, SimpleScheduledDevice
 
 
-def authenticate_to_besmart(besmart_parameters: dict[str, Any]) -> str:
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-Auth': besmart_parameters['workspace_key'],
-    }
-    body = {
-        "login": besmart_parameters["login"],
-        "password": besmart_parameters["password"],
-    }
-    r = requests.post(
-        'https://api.besmart.energy/api/users/token',
-        headers=headers,
-        json=body
-    )
-    return r.json()["token"]
-
-
 def get_data_from_besmart(
         besmart_parameters: dict[str, Any],
         token: str,
@@ -121,7 +103,7 @@ def prepare_device_simulator_from_data(
         besmart_parameters,
         signal_type: str,
 ) -> ScheduledDataDevice:
-    token = authenticate_to_besmart(besmart_parameters)
+    token = besmart_parameters["token"]
     if signal_type == "energy_consumption":
         time, data = get_energy_data(besmart_parameters, token, signal_type, True)
         return SimpleScheduledDevice(time.tolist(), data.tolist())
