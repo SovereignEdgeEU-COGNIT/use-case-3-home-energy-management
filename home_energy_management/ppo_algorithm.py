@@ -12,6 +12,7 @@ def make_decision(
     import json
     from io import BytesIO
 
+    import botocore
     import boto3
     import numpy as np
     import onnx
@@ -38,23 +39,6 @@ def make_decision(
         tensor_action = np.clip(tensor_action, np.array(lower_bounds), np.array(upper_bounds))
 
         return tensor_action
-
-    def authenticate_to_besmart() -> str:
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Auth': besmart_parameters['workspace_key'],
-        }
-        body = {
-            "login": besmart_parameters["login"],
-            "password": besmart_parameters["password"],
-        }
-        r = requests.post(
-            'https://api.besmart.energy/api/users/token',
-            headers=headers,
-            json=body
-        )
-        return r.json()["token"]
 
     def get_data_from_besmart(
             cid: int,
@@ -83,7 +67,9 @@ def make_decision(
             'https://api.besmart.energy/api/sensors/signals/data',
             headers=headers, json=body
         )
-        return res.json()[0]['data']
+        if res.status_code == 200:
+            return res.json()[0]['data']
+        return res.status_code
 
     def get_energy_data(
             identifier: dict[str, int],
@@ -93,8 +79,11 @@ def make_decision(
                                      identifier["mid"],
                                      identifier["moid"],
                                      is_cumulative)
-        value = np.array(data['value'])
-        origin = np.array(data['origin'])
+        try:
+            value = np.array(data['value'])
+            origin = np.array(data['origin'])
+        except Exception as e:
+            raise Exception(f'{e} - besmart returned HTTP {data}')
 
         pred_value = value[origin == 2]
         if is_cumulative:
@@ -105,7 +94,10 @@ def make_decision(
             pred_value = np.diff(pred_value) / (np.diff(pred_time) / 3600)
 
         if len(pred_value) < 1:
-            raise Exception('Not enough data for decision-making')
+            raise Exception(
+                'Not enough energy data for decision-making '
+                f'(cid: {identifier["cid"]}, mid: {identifier["mid"]}, moid: {identifier["moid"]})'
+            )
 
         return pred_value[0]
 
@@ -138,13 +130,18 @@ def make_decision(
             f'https://api.besmart.energy/api/weather/{sensor["lat"]}/{sensor["lon"]}/{besmart_parameters["temperature_moid"]}/data',
             headers=headers, params=params
         )
-        data = res.json()['data']
+        if res.status_code == 200:
+            data = res.json()['data']
+        else:
+            raise Exception(f'Besmart returned HTTP {res.status_code}')
 
         value = np.array(data['value'])
         origin = np.array(data['origin'])
         estm_value = value[origin == 3]
         if len(estm_value) < 1:
-            raise Exception('Not enough data for decision-making')
+            raise Exception(
+                f'Not enough temperature data for decision-making (lat: {sensor["lat"]}, lon: {sensor["lon"]})'
+            )
 
         return estm_value[0] - 272.15
 
@@ -186,31 +183,34 @@ def make_decision(
     upper_bounds = [max_temp_setting, storage_max_charging_power] + [
         ev_battery_parameters_per_id[ev_id]["nominal_power"] for ev_id in ev_id_list]
 
-    token = authenticate_to_besmart()
+    token = besmart_parameters["token"]
     pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
     energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
     temp_outside_pred = get_temperature_data()
 
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=s3_parameters["endpoint_url"],
-        aws_access_key_id=s3_parameters["access_key_id"],
-        aws_secret_access_key=s3_parameters["secret_access_key"],
-    )
-    stream = BytesIO()
-    s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=s3_parameters["model_filename"], Fileobj=stream)
-    stream.seek(0)
-    onnx_model = onnx.load_model_from_string(stream.getvalue())
-    model = convert(onnx_model)
+    try:
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=s3_parameters["endpoint_url"],
+            aws_access_key_id=s3_parameters["access_key_id"],
+            aws_secret_access_key=s3_parameters["secret_access_key"],
+        )
+        stream = BytesIO()
+        s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=s3_parameters["model_filename"], Fileobj=stream)
+        stream.seek(0)
+        onnx_model = onnx.load_model_from_string(stream.getvalue())
+        model = convert(onnx_model)
 
-    stream = BytesIO()
-    state_filename = s3_parameters["model_filename"].split('.')[0] + "_state_range.json"
-    s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=state_filename, Fileobj=stream)
-    stream.seek(0)
-    state_range = json.loads(stream.read().decode("utf-8"))
-    pv_generation_range = state_range["pv_generation"]
-    energy_consumption_range = state_range["energy_consumption"]
-    temp_outside_range = state_range["temperature"]
+        stream = BytesIO()
+        state_filename = s3_parameters["model_filename"].split('.')[0] + "_state_range.json"
+        s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=state_filename, Fileobj=stream)
+        stream.seek(0)
+        state_range = json.loads(stream.read().decode("utf-8"))
+        pv_generation_range = state_range["pv_generation"]
+        energy_consumption_range = state_range["energy_consumption"]
+        temp_outside_range = state_range["temperature"]
+    except botocore.exceptions.ClientError:
+        raise Exception(f'Error loading trained model ({s3_parameters["model_filename"]})')
 
     state = (
         (state_datetime.hour + state_datetime.minute / 60) / 24,
@@ -629,23 +629,6 @@ def train(
 
         return new_action_std
 
-    def authenticate_to_besmart() -> str:
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Auth': besmart_parameters['workspace_key'],
-        }
-        body = {
-            "login": besmart_parameters["login"],
-            "password": besmart_parameters["password"],
-        }
-        r = requests.post(
-            'https://api.besmart.energy/api/users/token',
-            headers=headers,
-            json=body
-        )
-        return r.json()["token"]
-
     def get_data_from_besmart(
             cid: int,
             mid: int,
@@ -672,7 +655,9 @@ def train(
             'https://api.besmart.energy/api/sensors/signals/data',
             headers=headers, json=body
         )
-        return res.json()[0]['data']
+        if res.status_code == 200:
+            return res.json()[0]['data']
+        return res.status_code
 
     def get_energy_data(
             identifier: dict[str, int],
@@ -682,9 +667,12 @@ def train(
                                      identifier["mid"],
                                      identifier["moid"],
                                      is_cumulative)
-        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
-        value = np.array(data['value'])
-        origin = np.array(data['origin'])
+        try:
+            time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
+            value = np.array(data['value'])
+            origin = np.array(data['origin'])
+        except Exception as e:
+            raise Exception(f'{e} - besmart returned HTTP {data}')
 
         real_value = value[origin == 1]
         real_time = time[origin == 1]
@@ -695,7 +683,10 @@ def train(
             real_value, real_time = validate_data(real_time, real_value, is_cumulative)
             pred_value, pred_time = validate_data(pred_time, pred_value, is_cumulative)
         except ValueError:
-            raise Exception('Not enough data for training')
+            raise Exception(
+                'Not enough energy data for training '
+                f'(cid: {identifier["cid"]}, mid: {identifier["mid"]}, moid: {identifier["moid"]})'
+            )
 
         if is_cumulative:
             real_value = np.diff(real_value) / (np.diff(real_time.astype(int)) / 60)
@@ -731,7 +722,10 @@ def train(
             f'https://api.besmart.energy/api/weather/{sensor["lat"]}/{sensor["lon"]}/{besmart_parameters["temperature_moid"]}/data',
             headers=headers, params=params
         )
-        data = res.json()['data']
+        if res.status_code == 200:
+            data = res.json()['data']
+        else:
+            raise Exception(f'Besmart returned HTTP {res.status_code}')
 
         time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
         value = np.array(data['value'])
@@ -741,7 +735,9 @@ def train(
         try:
             pred_value, _ = validate_data(estm_time, estm_value)
         except ValueError:
-            raise Exception('Not enough data for training')
+            raise Exception(
+                f'Not enough temperature data for training (lat: {sensor["lat"]}, lon: {sensor["lon"]})'
+            )
 
         return pred_value - 272.15
 
@@ -861,7 +857,7 @@ def train(
                            np.datetime64(int(besmart_parameters["till"]), "s"),
                            datetime.timedelta(seconds=cycle_timedelta_s))
 
-    token = authenticate_to_besmart()
+    token = besmart_parameters["token"]
     pv_generation_real, pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
     energy_consumption_real, energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
     temp_outside_pred = get_temperature_data()
@@ -873,7 +869,7 @@ def train(
 
     ep_reward_list = []
     number_of_cycles = datetime.timedelta(days=1) // datetime.timedelta(seconds=cycle_timedelta_s)
-    max_train_index = len(timestamps) - 25
+    max_train_index = len(timestamps) - number_of_cycles
     train_indexes = np.random.randint(max_train_index, size=(max_train_index,))
     for ep in range(number_of_episodes):
         episode_start_index = train_indexes[ep % len(train_indexes)]
@@ -1178,23 +1174,6 @@ def evaluate(
             next_is_heating_on,
         )
 
-    def authenticate_to_besmart() -> str:
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Auth': besmart_parameters['workspace_key'],
-        }
-        body = {
-            "login": besmart_parameters["login"],
-            "password": besmart_parameters["password"],
-        }
-        r = requests.post(
-            'https://api.besmart.energy/api/users/token',
-            headers=headers,
-            json=body
-        )
-        return r.json()["token"]
-
     def get_data_from_besmart(
             cid: int,
             mid: int,
@@ -1221,7 +1200,9 @@ def evaluate(
             'https://api.besmart.energy/api/sensors/signals/data',
             headers=headers, json=body
         )
-        return res.json()[0]['data']
+        if res.status_code == 200:
+            return res.json()[0]['data']
+        return res.status_code
 
     def get_energy_data(
             identifier: dict[str, int],
@@ -1231,9 +1212,12 @@ def evaluate(
                                      identifier["mid"],
                                      identifier["moid"],
                                      is_cumulative)
-        time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
-        value = np.array(data['value'])
-        origin = np.array(data['origin'])
+        try:
+            time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
+            value = np.array(data['value'])
+            origin = np.array(data['origin'])
+        except Exception as e:
+            raise Exception(f'{e} - besmart returned HTTP {data}')
 
         real_value = value[origin == 1]
         real_time = time[origin == 1]
@@ -1244,7 +1228,10 @@ def evaluate(
             real_value, real_time = validate_data(real_time, real_value, is_cumulative)
             pred_value, pred_time = validate_data(pred_time, pred_value, is_cumulative)
         except ValueError:
-            raise Exception('Not enough data for training')
+            raise Exception(
+                'Not enough energy data for evaluation '
+                f'(cid: {identifier["cid"]}, mid: {identifier["mid"]}, moid: {identifier["moid"]})'
+            )
 
         if is_cumulative:
             real_value = np.diff(real_value) / (np.diff(real_time.astype(int)) / 60)
@@ -1280,7 +1267,10 @@ def evaluate(
             f'https://api.besmart.energy/api/weather/{sensor["lat"]}/{sensor["lon"]}/{besmart_parameters["temperature_moid"]}/data',
             headers=headers, params=params
         )
-        data = res.json()['data']
+        if res.status_code == 200:
+            data = res.json()['data']
+        else:
+            raise Exception(f'Besmart returned HTTP {res.status_code}')
 
         time = (np.array(data['time']) * 1e6).astype(int).astype('datetime64[ns]').astype('datetime64[m]')
         value = np.array(data['value'])
@@ -1290,7 +1280,9 @@ def evaluate(
         try:
             pred_value, _ = validate_data(estm_time, estm_value)
         except ValueError:
-            raise Exception('Not enough data for training')
+            raise Exception(
+                f'Not enough temperature data for evaluation (lat: {sensor["lat"]}, lon: {sensor["lon"]})'
+            )
 
         return pred_value - 272.15
 
@@ -1385,7 +1377,7 @@ def evaluate(
                            np.datetime64(int(besmart_parameters["till"]), "s"),
                            datetime.timedelta(seconds=cycle_timedelta_s))
 
-    token = authenticate_to_besmart()
+    token = besmart_parameters["token"]
     pv_generation_real, pv_generation_pred = get_energy_data(besmart_parameters["pv_generation"])
     energy_consumption_real, energy_consumption_pred = get_energy_data(besmart_parameters["energy_consumption"], True)
     temp_outside_pred = get_temperature_data()
