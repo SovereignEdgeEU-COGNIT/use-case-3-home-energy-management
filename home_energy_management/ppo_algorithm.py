@@ -202,7 +202,7 @@ def make_decision(
         model = convert(onnx_model)
 
         stream = BytesIO()
-        state_filename = s3_parameters["model_filename"].split('.')[0] + "_state_range.json"
+        state_filename = '.'.join(s3_parameters["model_filename"].split('.')[:-1]) + "_state_range.json"
         s3_client.download_fileobj(Bucket=s3_parameters["bucket_name"], Key=state_filename, Fileobj=stream)
         stream.seek(0)
         state_range = json.loads(stream.read().decode("utf-8"))
@@ -958,7 +958,7 @@ def train(
         "pv_generation": [0.0, pv_generation_max],
         "temperature": [temp_outside_min, temp_outside_max],
     }
-    state_filename = s3_parameters["model_filename"].split('.')[0] + "_state_range.json"
+    state_filename = '.'.join(s3_parameters["model_filename"].split('.')[:-1]) + "_state_range.json"
     bucket.put_object(Key=state_filename, Body=(bytes(json.dumps(state_range).encode('UTF-8'))))
 
     return True
@@ -1400,7 +1400,7 @@ def evaluate(
         model = convert(onnx_model)
 
         stream = BytesIO()
-        state_filename = s3_parameters["model_filename"].split('.')[0] + "_state_range.json"
+        state_filename = '.'.join(s3_parameters["model_filename"].split('.')[:-1]) + "_state_range.json"
         s3_client.download_fileobj(
             Bucket=s3_parameters["bucket_name"],
             Key=state_filename,
@@ -1459,11 +1459,11 @@ def evaluate(
     reward_array = np.array(reward_list).reshape(number_of_cycles, -1)
     energy_balance_array = np.array(energy_balance_list).reshape(number_of_cycles, -1)
 
-    is_valid = np.mean(np.sum(reward_array, axis=0)) > eval_parameters.get("mean_reward_threshold", 0.0)
+    is_valid = bool(np.mean(np.sum(reward_array, axis=0)) > eval_parameters.get("mean_reward_threshold", 0.0))
     if eval_parameters.get("return_metrics", False):
         return json.dumps(
             {
-                "is_valid": bool(is_valid),
+                "is_valid": is_valid,
                 "mean_reward": float(np.mean(np.sum(reward_array, axis=0))),
                 "mean_energy_balance": float(np.mean(np.sum(energy_balance_array, axis=0))),
             }
